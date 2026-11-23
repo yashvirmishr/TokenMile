@@ -47,11 +47,18 @@ pub struct AppPreferences {
     /// How much history to import the first time a provider syncs.
     /// `0` means all available history.
     pub backfill_days: i64,
+
+    /// Active UI theme key, e.g. `builtin:instrument` or `user:my-theme`.
+    /// The theme itself lives in the frontend bundle or the themes folder.
+    pub ui_theme: String,
 }
 
 /// Default first-import window. Deliberately bounded: a full history import on
 /// first launch should not stall the dashboard.
 pub const DEFAULT_BACKFILL_DAYS: i64 = 30;
+
+/// The built-in theme every installation starts with.
+pub const DEFAULT_UI_THEME: &str = "builtin:instrument";
 
 impl Default for AppPreferences {
     fn default() -> Self {
@@ -63,7 +70,28 @@ impl Default for AppPreferences {
             window_y: None,
             disabled_providers: Vec::new(),
             backfill_days: DEFAULT_BACKFILL_DAYS,
+            ui_theme: DEFAULT_UI_THEME.to_string(),
         }
+    }
+}
+
+/// Keep a theme key usable as a small preference value.
+///
+/// Theme files can live in the user themes folder, but the key persisted here
+/// is just `builtin:instrument` or `user:my-theme`. Anything unexpected falls
+/// back to the default instead of failing to load preferences entirely.
+fn normalize_ui_theme(value: &str) -> String {
+    let trimmed = value.trim();
+    let safe = !trimmed.is_empty()
+        && trimmed.len() <= 96
+        && trimmed
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '-' | '_' | ':'));
+
+    if safe {
+        trimmed.to_string()
+    } else {
+        DEFAULT_UI_THEME.to_string()
     }
 }
 
@@ -76,12 +104,18 @@ impl AppPreferences {
         if self.window_height == 0 {
             self.window_height = DEFAULT_WINDOW_HEIGHT;
         }
-        self.window_width = self.window_width.clamp(MIN_WINDOW_WIDTH, MAX_WINDOW_DIMENSION);
-        self.window_height = self.window_height.clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW_DIMENSION);
+        self.window_width = self
+            .window_width
+            .clamp(MIN_WINDOW_WIDTH, MAX_WINDOW_DIMENSION);
+        self.window_height = self
+            .window_height
+            .clamp(MIN_WINDOW_HEIGHT, MAX_WINDOW_DIMENSION);
 
         if self.backfill_days < 0 {
             self.backfill_days = DEFAULT_BACKFILL_DAYS;
         }
+
+        self.ui_theme = normalize_ui_theme(&self.ui_theme);
 
         // Keep the disabled list canonical so two equivalent preferences files
         // never compare as different.
@@ -303,6 +337,18 @@ impl PreferencesStore {
         Ok(self.data.clone())
     }
 
+    /// Persist the selected community theme. The key is validated here; the
+    /// theme document itself is validated by the frontend before it is applied.
+    pub fn set_ui_theme(&mut self, theme: &str) -> Result<AppPreferences, String> {
+        let next = normalize_ui_theme(theme);
+        if next == self.data.ui_theme {
+            return Ok(self.data.clone());
+        }
+        self.data.ui_theme = next;
+        self.save()?;
+        Ok(self.data.clone())
+    }
+
     pub fn set_always_on_top(&mut self, enabled: bool) -> Result<AppPreferences, String> {
         if self.data.always_on_top == enabled {
             return Ok(self.data.clone());
@@ -428,7 +474,32 @@ mod tests {
 
         // Simulate a restart: a brand new store reads the same file.
         let reloaded = PreferencesStore::load(path);
-        assert!(reloaded.data().always_on_top, "always-on-top did not persist");
+        assert!(
+            reloaded.data().always_on_top,
+            "always-on-top did not persist"
+        );
+    }
+
+    #[test]
+    fn ui_theme_round_trips_across_restart() {
+        let path = temp_prefs_path("theme");
+
+        {
+            let mut store = PreferencesStore::load(path.clone());
+            assert_eq!(store.data().ui_theme, DEFAULT_UI_THEME);
+            store.set_ui_theme("user:midnight").unwrap();
+        }
+
+        let reloaded = PreferencesStore::load(path);
+        assert_eq!(reloaded.data().ui_theme, "user:midnight");
+    }
+
+    #[test]
+    fn unsafe_ui_theme_falls_back_to_the_default() {
+        let path = temp_prefs_path("bad-theme");
+        let mut store = PreferencesStore::load(path);
+        let updated = store.set_ui_theme("../../etc/passwd").unwrap();
+        assert_eq!(updated.ui_theme, DEFAULT_UI_THEME);
     }
 
     #[test]
@@ -479,6 +550,7 @@ mod tests {
         assert!(store.data().always_on_top);
         assert_eq!(store.data().window_width, DEFAULT_WINDOW_WIDTH);
         assert_eq!(store.data().window_height, DEFAULT_WINDOW_HEIGHT);
+        assert_eq!(store.data().ui_theme, DEFAULT_UI_THEME);
     }
 
     // ── Geometry validation ───────────────────────────────────────────
@@ -502,8 +574,16 @@ mod tests {
     fn off_screen_position_is_clamped_back_into_view() {
         let prefs = prefs_at(900, 600, Some(9000), Some(8000));
         let geo = resolve_single(&prefs);
-        assert!(geo.x >= 0 && geo.x + geo.width as i32 <= 1920, "x={}", geo.x);
-        assert!(geo.y >= 0 && geo.y + geo.height as i32 <= 1080, "y={}", geo.y);
+        assert!(
+            geo.x >= 0 && geo.x + geo.width as i32 <= 1920,
+            "x={}",
+            geo.x
+        );
+        assert!(
+            geo.y >= 0 && geo.y + geo.height as i32 <= 1080,
+            "y={}",
+            geo.y
+        );
     }
 
     #[test]

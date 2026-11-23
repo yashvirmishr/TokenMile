@@ -3,17 +3,13 @@ import { ALL_PROVIDERS, useDashboard } from './hooks/useDashboard';
 import { useDesktop } from './hooks/useDesktop';
 import { usePricingRegistry } from './hooks/usePricingRegistry';
 import { TitleBar } from './components/TitleBar';
-import { ProviderTable } from './components/ProviderTable';
-import { ModelUsageTable } from './components/ModelUsageTable';
-import { ValueDisplay } from './components/ValueDisplay';
-import { ActivityFeed } from './components/ActivityFeed';
-import { ProviderStatusPanel } from './components/ProviderStatus';
+import { DashboardLayout } from './components/DashboardLayout';
+import { createDefaultSections } from './components/DashboardSections';
+import { ThemePicker } from './components/ThemePicker';
 import { SettingsPanel } from './components/SettingsPanel';
 import { PricingPanel } from './components/PricingPanel';
 import { SyncStatus } from './components/SyncStatus';
-import { UsageCalendar } from './components/UsageCalendar';
-import { UsageHeadline } from './components/UsageHeadline';
-import { UsageChart } from './components/UsageChart';
+import { useTheme } from './theme';
 import type { TimeRange } from './types';
 
 /** Matches `sync::BACKGROUND_SYNC_INTERVAL_SECS` in the Rust backend. */
@@ -32,6 +28,7 @@ function App() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [pricingOpen, setPricingOpen] = useState(false);
   const pricing = usePricingRegistry(pricingOpen);
+  const theme = useTheme();
 
   const { sync } = dashboard;
   const { toggleAlwaysOnTop, hideToTray, quit } = desktop;
@@ -114,15 +111,46 @@ function App() {
 
   const panelOpen = settingsOpen || pricingOpen;
   const filter = dashboard.providerFilter;
-  const providerLabel =
+  const filterLabel =
     filter === ALL_PROVIDERS
-      ? null
+      ? RANGE_LABEL[dashboard.timeRange]
       : providers.find((p) => p.id === filter)?.short_label ?? filter;
-  const filterLabel = providerLabel ?? RANGE_LABEL[dashboard.timeRange];
 
   const summary = dashboard.data?.summary ?? null;
   const providerRows = dashboard.data?.provider_usage ?? [];
   const models = dashboard.data?.model_usage ?? [];
+
+  // The stock dashboard is a section map so a theme can reorder/hide panels and
+  // a community fork can override one entry without copying the whole app.
+  const sections = createDefaultSections({
+    summary,
+    series: dashboard.data?.series ?? null,
+    providers,
+    providerRows,
+    models,
+    activity: dashboard.data?.activity ?? [],
+    range: dashboard.timeRange,
+    filterLabel,
+    providerFilter: filter === ALL_PROVIDERS ? null : filter,
+    filters: (
+      <div className="flex flex-wrap items-center gap-1.5">
+        <span className="label mr-1">scope</span>
+        {tabs.map((tab) => (
+          <button
+            key={tab.id}
+            onClick={() => dashboard.setProviderFilter(tab.id)}
+            className={`chip ${
+              dashboard.providerFilter === tab.id ? 'chip-filter-on' : ''
+            }`}
+            title={tab.key ? `Show all providers [${tab.key}]` : `Only ${tab.label}`}
+          >
+            {tab.label}
+          </button>
+        ))}
+        <span className="mono ml-auto text-[9.5px] text-bone-3">{filterLabel}</span>
+      </div>
+    ),
+  });
 
   return (
     <div className="relative z-10 flex h-full w-full flex-col">
@@ -167,7 +195,21 @@ function App() {
               onHide={hideToTray}
               onQuit={quit}
               onClose={() => setSettingsOpen(false)}
-            />
+            >
+              <ThemePicker
+                themes={theme.themes}
+                active={theme.active}
+                activeKey={theme.activeKey}
+                directory={theme.directory}
+                problems={theme.problems}
+                loading={theme.loading}
+                error={theme.error}
+                onSelect={theme.selectTheme}
+                onReload={() => void theme.reload()}
+                onOpenFolder={() => void theme.openFolder()}
+                onDuplicate={theme.duplicateActiveTheme}
+              />
+            </SettingsPanel>
           )}
 
           {pricingOpen && (
@@ -193,72 +235,7 @@ function App() {
             onDismissHidden={desktop.dismissHiddenNotice}
           />
 
-          <div
-            className="reveal grid gap-3 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]"
-            style={{ ['--reveal-delay' as string]: '0ms' }}
-          >
-            <UsageHeadline
-              summary={summary}
-              range={dashboard.timeRange}
-              modelCount={models.length}
-              providerCount={providerRows.length}
-            />
-            <UsageChart
-              series={dashboard.data?.series ?? null}
-              range={dashboard.timeRange}
-              providers={providers}
-              filterLabel={filterLabel}
-            />
-          </div>
-
-          <div className="reveal" style={{ ['--reveal-delay' as string]: '40ms' }}>
-            <UsageCalendar provider={providerLabel ? filter : null} providerLabel={providerLabel} />
-          </div>
-
-          <div className="reveal" style={{ ['--reveal-delay' as string]: '70ms' }}>
-            <ValueDisplay summary={summary} />
-          </div>
-
-          {/* Scope of the breakdown below: which providers are being read. */}
-          <div
-            className="reveal flex flex-wrap items-center gap-1.5"
-            style={{ ['--reveal-delay' as string]: '110ms' }}
-          >
-            <span className="label mr-1">scope</span>
-            {tabs.map((tab) => (
-              <button
-                key={tab.id}
-                onClick={() => dashboard.setProviderFilter(tab.id)}
-                className={`chip ${
-                  dashboard.providerFilter === tab.id ? 'chip-filter-on' : ''
-                }`}
-                title={tab.key ? `Show all providers [${tab.key}]` : `Only ${tab.label}`}
-              >
-                {tab.label}
-              </button>
-            ))}
-            <span className="mono ml-auto text-[9.5px] text-bone-3">{filterLabel}</span>
-          </div>
-
-          <div
-            className="reveal grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]"
-            style={{ ['--reveal-delay' as string]: '150ms' }}
-          >
-            <ProviderTable
-              providers={providerRows}
-              status={providers}
-              rangeLabel={filterLabel}
-            />
-            <ActivityFeed entries={dashboard.data?.activity ?? []} status={providers} />
-          </div>
-
-          <div className="reveal" style={{ ['--reveal-delay' as string]: '190ms' }}>
-            <ModelUsageTable models={models} status={providers} />
-          </div>
-
-          <div className="reveal" style={{ ['--reveal-delay' as string]: '230ms' }}>
-            <ProviderStatusPanel providers={providers} />
-          </div>
+          <DashboardLayout layout={theme.active.layout} sections={sections} />
 
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
             <Hint keys="1–4" text="range" />

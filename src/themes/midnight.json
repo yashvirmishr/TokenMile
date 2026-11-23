@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "id": "midnight",
+  "name": "Midnight",
+  "author": "FreeTokenMeter",
+  "description": "Cool navy surfaces and a signal-blue accent for people who keep the meter open beside a dark editor.",
+  "appearance": "dark",
+  "density": "comfortable",
+  "motion": true,
+  "colors": {
+    "ink": "#0a1018",
+    "shell": "#0f1823",
+    "raise": "#162231",
+    "hair": "#1f2d3d",
+    "hair_hi": "#30445a",
+    "bone": "#e6eef6",
+    "bone_2": "#a8b8c8",
+    "bone_3": "#6f8296",
+    "needle": "#4ea7ff",
+    "verd": "#43c9a8",
+    "brass": "#e0bd52",
+    "slate": "#8aa7c4",
+    "alert": "#ff6f61",
+    "series": ["#4ea7ff", "#43c9a8", "#e0bd52", "#9a8cff", "#ff8a5c", "#7fd67a"]
+  },
+  "fonts": {
+    "display": "'Iowan Old Style', 'Palatino Linotype', Palatino, Constantia, Georgia, serif",
+    "label": "Bahnschrift, 'DIN Alternate', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif",
+    "data": "'Cascadia Mono', Consolas, 'SF Mono', ui-monospace, monospace"
+  },
+  "layout": {
+    "order": [
+      "headline",
+      "chart",
+      "calendar",
+      "value",
+      "filters",
+      "providers",
+      "activity",
+      "models",
+      "status"
+    ],
+    "hidden": []
+  }
+}

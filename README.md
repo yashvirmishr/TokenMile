@@ -431,6 +431,8 @@ FreeTokenMeter/
 ├── src/                          # React frontend
 │   ├── components/               # UI components
 │   ├── hooks/                    # React hooks
+│   ├── theme/                    # theme-pack schema, loader and CSS application
+│   ├── themes/                   # built-in community theme JSON
 │   └── types/                    # TypeScript types (mirror usage.rs)
 ├── src-tauri/
 │   ├── src/
@@ -449,6 +451,7 @@ FreeTokenMeter/
 │   │   ├── registry.rs           # Dynamic LiteLLM registry (cached, refreshed daily)
 │   │   ├── model_normalization.rs# Provider-prefix stripping and aliases
 │   │   ├── sync.rs               # Shared sync manager (UI, tray, scheduler)
+│   │   ├── themes.rs             # Community theme discovery and safe file IO
 │   │   ├── tray.rs               # System tray menu and events
 │   │   ├── window.rs             # Show/hide, always-on-top, geometry
 │   │   └── preferences.rs        # preferences.json + geometry validation
@@ -594,6 +597,29 @@ second meter that would sync against the same database
 The provider filter tabs are clickable and are generated from the providers the
 backend reports, so adding a provider needs no frontend change.
 
+## Customizing the UI
+
+The dashboard is designed to be forked. There are three levels, in increasing
+order of effort:
+
+1. **Pick a built-in pack.** Instrument, Midnight, Paper and Focus ship with the
+   app. Switch them in `Settings → Appearance`.
+2. **Write a JSON theme pack.** A pack is a small token document in
+   `%APPDATA%\freetokenmeter\themes` (Windows; `~/Library/Application Support`
+   on macOS, `~/.local/share` on Linux). It can recolour the app, change fonts,
+   choose compact/roomy density, disable motion, and reorder or hide dashboard
+   sections. Drop the file in, press **reload**, and the window updates without
+   a rebuild. **start from this pack** writes an editable copy for you.
+3. **Fork the frontend.** `useDashboard()` owns the backend data contract,
+   `DashboardLayout` owns section order and `useTheme()` owns packs. Replace the
+   body of `App.tsx` with your own layout and keep those seams; no Rust changes
+   are needed.
+
+Theme files are validated, size-limited and applied only as CSS custom
+properties; a pack cannot execute code. The full schema, layout section ids,
+community checklist and fork guide live in
+[docs/UI_CUSTOMIZATION.md](docs/UI_CUSTOMIZATION.md).
+
 ## Adding a new provider
 
 Every provider is registered in exactly one place —
@@ -723,7 +749,7 @@ placeholder, a label is too wide, or a provider reports a state without a reason
 ```bash
 cd src-tauri && cargo test          # provider parsers, availability, dedup,
                                     # incremental sync, cursors, pricing, migration,
-                                    # failure isolation
+                                    # failure isolation, theme-pack discovery
 npm run build                       # TypeScript + production frontend build
 ```
 
@@ -754,6 +780,11 @@ and the second pass adds nothing (deduplication).
    shows `DISABLED`, re-enable it and confirm it resumes.
 6. Hide to tray, generate new usage in a provider, wait one cycle, reopen and confirm
    the new usage appears.
+7. Appearance: switch Instrument → Paper → Focus; confirm the palette changes, Focus
+   hides the calendar, activity, models and status, and the choice survives a restart.
+   Then use
+   **start from → save copy**, edit the JSON, press **reload**, and confirm the
+   edited pack is applied without a rebuild.
 
 ## Not yet implemented
 

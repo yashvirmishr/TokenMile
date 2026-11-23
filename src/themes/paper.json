@@ -1,0 +1,45 @@
+{
+  "schema": 1,
+  "id": "paper",
+  "name": "Paper",
+  "author": "FreeTokenMeter",
+  "description": "A warm, light workbench: ink on paper with a rust-red accent. Useful in bright rooms and for screenshots.",
+  "appearance": "light",
+  "density": "comfortable",
+  "motion": true,
+  "colors": {
+    "ink": "#f2efe7",
+    "shell": "#f8f5ed",
+    "raise": "#ebe6db",
+    "hair": "#d8d2c4",
+    "hair_hi": "#b9b09e",
+    "bone": "#241f17",
+    "bone_2": "#4f483b",
+    "bone_3": "#6b6153",
+    "needle": "#b8401f",
+    "verd": "#2a756a",
+    "brass": "#81600e",
+    "slate": "#4b6d88",
+    "alert": "#b3362a",
+    "series": ["#b8401f", "#2a756a", "#81600e", "#4b6d88", "#8a5a2b", "#5f6b34"]
+  },
+  "fonts": {
+    "display": "'Iowan Old Style', 'Palatino Linotype', Palatino, Constantia, Georgia, serif",
+    "label": "Bahnschrift, 'DIN Alternate', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif",
+    "data": "'Cascadia Mono', Consolas, 'SF Mono', ui-monospace, monospace"
+  },
+  "layout": {
+    "order": [
+      "headline",
+      "chart",
+      "calendar",
+      "value",
+      "filters",
+      "providers",
+      "activity",
+      "models",
+      "status"
+    ],
+    "hidden": []
+  }
+}

@@ -214,6 +214,7 @@ export interface AppPreferences {
   /** First-import window in days; 0 means all available history. */
   backfill_days: number;
   /** Active UI theme key, e.g. `builtin:instrument` or `user:my-theme`. */
+  ui_theme: string;
 }
 
 export interface WindowState {

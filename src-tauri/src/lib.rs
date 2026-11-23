@@ -64,6 +64,7 @@ mod pricing;
 mod provider;
 mod registry;
 mod sync;
+mod themes;
 mod tray;
 mod usage;
 mod window;
@@ -571,6 +572,38 @@ fn get_preferences(state: State<'_, AppState>) -> Result<AppPreferences, String>
     Ok(prefs.data().clone())
 }
 
+/// Persist the selected UI theme key. The theme document itself is validated in
+/// the frontend and loaded from the built-in bundle or the themes folder.
+#[tauri::command]
+fn set_ui_theme(state: State<'_, AppState>, theme: String) -> Result<AppPreferences, String> {
+    let mut prefs = state.prefs.lock().map_err(|e| e.to_string())?;
+    prefs.set_ui_theme(&theme)
+}
+
+/// Every community theme file, plus a per-file reason for anything skipped.
+/// A malformed file never prevents the valid themes from loading.
+#[tauri::command(async)]
+fn list_user_themes() -> Result<themes::ThemeLibrary, String> {
+    let dir = themes::themes_dir(&get_data_dir());
+    themes::ensure_dir(&dir)?;
+    Ok(themes::discover(&dir))
+}
+
+/// Save a copy of a theme into the user themes folder, choosing a unique name.
+#[tauri::command]
+fn save_user_theme(name: String, contents: String) -> Result<themes::UserThemeFile, String> {
+    let dir = themes::themes_dir(&get_data_dir());
+    themes::save(&dir, &name, &contents)
+}
+
+/// Open the drop-in themes folder in the platform file manager.
+#[tauri::command]
+fn open_themes_folder() -> Result<String, String> {
+    let dir = themes::themes_dir(&get_data_dir());
+    themes::open_folder(&dir)?;
+    Ok(dir.display().to_string())
+}
+
 #[tauri::command]
 fn get_window_state(app: tauri::AppHandle) -> window::WindowState {
     window::window_state(&app)
@@ -748,6 +781,10 @@ pub fn run() {
             refresh_pricing,
             search_pricing_registry,
             get_preferences,
+            set_ui_theme,
+            list_user_themes,
+            save_user_theme,
+            open_themes_folder,
             get_window_state,
             set_always_on_top,
             toggle_always_on_top,

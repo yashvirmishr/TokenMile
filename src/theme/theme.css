@@ -1,0 +1,185 @@
+/*
+  Community theme support.
+
+  The palette itself is applied at runtime as CSS custom properties on <html>
+  (see src/theme/apply.ts). This file holds the structural responses a token
+  document cannot express — density, motion, a light-pack adjustment and the
+  picker's own layout. It is imported after index.css so these rules win
+  without editing the core stylesheet.
+*/
+
+/* ── Density ───────────────────────────────────────────────────────────── */
+
+html[data-density='compact'] body {
+  font-size: 12px;
+}
+
+html[data-density='compact'] .row {
+  padding: 6px 12px;
+}
+
+html[data-density='compact'] .panel-head {
+  padding: 8px 12px 7px;
+}
+
+html[data-density='compact'] .field {
+  padding: 5px 2px;
+}
+
+html[data-density='compact'] .chip {
+  padding: 4px 7px;
+}
+
+html[data-density='roomy'] .row {
+  padding: 12px 18px;
+}
+
+html[data-density='roomy'] .panel-head {
+  padding: 12px 18px 11px;
+}
+
+html[data-density='roomy'] .field {
+  padding: 10px 2px;
+}
+
+/* ── Motion ────────────────────────────────────────────────────────────── */
+
+html[data-motion='off'] .reveal,
+html[data-motion='off'] .bar,
+html[data-motion='off'] .measure-fill,
+html[data-motion='off'] .mix-seg,
+html[data-motion='off'] .live-dot,
+html[data-motion='off'] .spin {
+  animation: none !important;
+}
+
+html[data-motion='off'] * {
+  transition-duration: 0.01ms !important;
+}
+
+/* ── Theme picker ──────────────────────────────────────────────────────── */
+
+.theme-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(148px, 1fr));
+  gap: 6px;
+}
+
+.theme-card {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--color-hair);
+  border-radius: 2px;
+  background: var(--color-shell);
+  padding: 0;
+  text-align: left;
+  transition:
+    border-color 0.15s ease,
+    background-color 0.15s ease;
+}
+
+.theme-card:hover {
+  border-color: var(--color-hair-hi);
+  background: var(--color-raise);
+}
+
+.theme-card-on,
+.theme-card-on:hover {
+  border-color: var(--color-needle);
+}
+
+.theme-swatch {
+  display: flex;
+  height: 20px;
+}
+
+.theme-swatch > span {
+  flex: 1;
+}
+
+.theme-card-body {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  gap: 2px;
+  padding: 6px 8px 7px;
+}
+
+.theme-card-meta {
+  font-family: var(--font-data);
+  font-size: 9px;
+  color: var(--color-bone-3);
+}
+
+.theme-card-desc {
+  display: -webkit-box;
+  overflow: hidden;
+  font-family: var(--font-display);
+  font-size: 10.5px;
+  font-style: italic;
+  line-height: 1.3;
+  color: var(--color-bone-3);
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
+}
+
+.theme-active {
+  font-family: var(--font-label);
+  font-size: 8px;
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--color-needle);
+}
+
+.theme-input {
+  min-width: 0;
+  flex: 1;
+  border: 1px solid var(--color-hair);
+  border-radius: 2px;
+  background: var(--color-ink);
+  padding: 4px 7px;
+  color: var(--color-bone);
+  font-family: var(--font-data);
+  font-size: 10px;
+}
+
+.theme-input:focus {
+  border-color: var(--color-hair-hi);
+}
+
+.theme-warning {
+  margin-top: 8px;
+  border: 1px solid color-mix(in srgb, var(--color-brass) 40%, transparent);
+  padding: 6px 8px;
+}
+
+.theme-copy {
+  margin-top: 10px;
+  border-top: 1px solid var(--color-hair);
+  padding-top: 9px;
+}
+
+.theme-copy summary {
+  cursor: pointer;
+  list-style: none;
+}
+
+.theme-copy summary::-webkit-details-marker {
+  display: none;
+}
+
+/* A light pack needs a readable native control, a softer dot grid and a
+   lighter panel shadow. */
+html[data-appearance='light'] .panel-open {
+  box-shadow: 0 24px 60px -24px color-mix(in srgb, var(--color-bone) 35%, transparent);
+}
+
+html[data-appearance='light'] #root::before {
+  background-image: radial-gradient(
+    circle at 1px 1px,
+    color-mix(in srgb, var(--color-bone) 9%, transparent) 1px,
+    transparent 0
+  );
+}

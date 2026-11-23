@@ -1,0 +1,41 @@
+{
+  "schema": 1,
+  "id": "focus",
+  "name": "Focus",
+  "author": "FreeTokenMeter",
+  "description": "The essentials only: headline, chart, value, provider scope and the provider table, with tighter rows and no motion.",
+  "appearance": "dark",
+  "density": "compact",
+  "motion": false,
+  "colors": {
+    "ink": "#14120d",
+    "shell": "#1a1813",
+    "raise": "#23201a",
+    "hair": "#2e2a21",
+    "hair_hi": "#453d30",
+    "bone": "#efe7d8",
+    "bone_2": "#bcb2a0",
+    "bone_3": "#8a8071",
+    "needle": "#e9613a",
+    "verd": "#56a295",
+    "brass": "#c9a227",
+    "slate": "#6e8ca8",
+    "alert": "#d95a4a",
+    "series": ["#e9613a", "#56a295", "#c9a227", "#6e8ca8", "#a8743f", "#7d8c4a"]
+  },
+  "fonts": {
+    "display": "'Iowan Old Style', 'Palatino Linotype', Palatino, Constantia, Georgia, serif",
+    "label": "Bahnschrift, 'DIN Alternate', 'Segoe UI Variable Display', 'Segoe UI', system-ui, sans-serif",
+    "data": "'Cascadia Mono', Consolas, 'SF Mono', ui-monospace, monospace"
+  },
+  "layout": {
+    "order": [
+      "headline",
+      "chart",
+      "value",
+      "filters",
+      "providers"
+    ],
+    "hidden": ["calendar", "activity", "models", "status"]
+  }
+}
