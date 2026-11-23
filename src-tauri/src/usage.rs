@@ -28,6 +28,7 @@ pub mod provider_id {
     pub const CODEX: &str = "codex";
     pub const GEMINI_CLI: &str = "gemini-cli";
     pub const GITHUB_COPILOT: &str = "github-copilot";
+    pub const DEEP_AI: &str = "deepai";
 }
 
 /// How a provider is paid for. Never inferred from the provider's name.
@@ -359,6 +360,28 @@ pub struct ActivityEntry {
     pub billing_unit: String,
 }
 
+/// One bucket of the dashboard's usage chart: a time bucket for one provider.
+///
+/// Buckets are emitted only where usage exists. The UI zero-fills the axis, so a
+/// quiet day reads as a gap in the bars rather than as missing data.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SeriesPoint {
+    /// Bucket key, formatted exactly as the SQL produced it: `2026-11-23T14`
+    /// (hour), `2026-11-23` (day), or the Monday of the week (week).
+    pub key: String,
+    pub provider: String,
+    pub tokens: i64,
+    pub requests: i64,
+}
+
+/// The chart series for the selected range.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct UsageSeries {
+    /// `hour`, `day` or `week`, chosen from the selected range.
+    pub granularity: String,
+    pub points: Vec<SeriesPoint>,
+}
+
 /// Everything the dashboard needs in one response.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DashboardData {
@@ -366,6 +389,7 @@ pub struct DashboardData {
     pub provider_usage: Vec<ProviderUsage>,
     pub model_usage: Vec<ModelUsage>,
     pub activity: Vec<ActivityEntry>,
+    pub series: UsageSeries,
     pub providers: Vec<ProviderStatus>,
 }
 

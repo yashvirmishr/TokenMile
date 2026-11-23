@@ -65,11 +65,7 @@ impl ClaudeCodeProvider {
     pub const ID: &'static str = crate::usage::provider_id::CLAUDE_CODE;
 
     pub fn new() -> Self {
-        Self::with_config_dir(
-            dirs::home_dir()
-                .unwrap_or_default()
-                .join(".claude"),
-        )
+        Self::with_config_dir(dirs::home_dir().unwrap_or_default().join(".claude"))
     }
 
     pub fn with_config_dir(config_dir: PathBuf) -> Self {
@@ -173,8 +169,16 @@ pub fn parse_transcript_lines<'a>(
             .get("id")
             .and_then(|v| v.as_str())
             .map(str::to_string)
-            .or_else(|| root.get("uuid").and_then(|v| v.as_str()).map(str::to_string))
-            .or_else(|| root.get("requestId").and_then(|v| v.as_str()).map(str::to_string));
+            .or_else(|| {
+                root.get("uuid")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                root.get("requestId")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+            });
 
         let Some(event_id) = event_id else {
             out.skipped += 1;
@@ -396,10 +400,13 @@ impl UsageProvider for ClaudeCodeProvider {
                 records.push(record);
             }
 
+            // A transcript that has been started is always read to its end, and
+            // only then does its offset advance; the loop stops between files.
+            // Truncating afterwards (the previous behaviour) discarded the tail
+            // of a file already marked as imported, losing those messages.
             next.offsets.insert(key, new_offset);
         }
 
-        records.truncate(request.limit);
         info!(
             "Claude Code: scanned {} line(s), imported {} record(s)",
             scanned,
@@ -518,7 +525,8 @@ mod tests {
 
     #[test]
     fn reports_not_installed_when_config_dir_is_absent() {
-        let provider = ClaudeCodeProvider::with_config_dir(PathBuf::from("/definitely/missing/claude"));
+        let provider =
+            ClaudeCodeProvider::with_config_dir(PathBuf::from("/definitely/missing/claude"));
         assert_eq!(provider.availability(), ProviderAvailability::NotInstalled);
     }
 
@@ -527,16 +535,16 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "ftm-claude-empty-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            crate::test_support::unique_id()
         ));
         std::fs::create_dir_all(dir.join("projects")).unwrap();
 
         let provider = ClaudeCodeProvider::with_config_dir(dir.clone());
-        assert_eq!(provider.availability(), ProviderAvailability::UsageUnavailable);
-        assert!(provider
-            .detail()
-            .unwrap()
-            .contains("transcripts"));
+        assert_eq!(
+            provider.availability(),
+            ProviderAvailability::UsageUnavailable
+        );
+        assert!(provider.detail().unwrap().contains("transcripts"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -546,7 +554,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "ftm-claude-inc-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            crate::test_support::unique_id()
         ));
         let project = dir.join("projects").join("demo");
         std::fs::create_dir_all(&project).unwrap();

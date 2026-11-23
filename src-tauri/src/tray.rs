@@ -103,7 +103,10 @@ fn setup_inner(app: &AppHandle) -> tauri::Result<()> {
     let always_on_top = crate::window::is_always_on_top(app);
 
     let Some(tray) = app.tray_by_id(TRAY_ID) else {
-        warn!("Tray icon '{}' was not created by Tauri; tray menu skipped", TRAY_ID);
+        warn!(
+            "Tray icon '{}' was not created by Tauri; tray menu skipped",
+            TRAY_ID
+        );
         return Ok(());
     };
 

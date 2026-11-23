@@ -149,7 +149,10 @@ pub fn parse_session(
     for message in messages {
         out.scanned += 1;
 
-        let kind = message.get("type").and_then(|v| v.as_str()).unwrap_or_default();
+        let kind = message
+            .get("type")
+            .and_then(|v| v.as_str())
+            .unwrap_or_default();
         if kind != "gemini" {
             out.skipped += 1;
             continue;
@@ -220,9 +223,8 @@ pub fn parse_session(
 
         // `total` from the source when present, otherwise the sum of what the
         // session actually reported (thoughts are billed as output).
-        let total = token_field(tokens, "total").unwrap_or_else(|| {
-            input.unwrap_or(0) + output.unwrap_or(0) + thoughts.unwrap_or(0)
-        });
+        let total = token_field(tokens, "total")
+            .unwrap_or_else(|| input.unwrap_or(0) + output.unwrap_or(0) + thoughts.unwrap_or(0));
 
         out.records.push(UsageRecord {
             id: format!("gemini_{}", event_id),
@@ -313,9 +315,10 @@ impl UsageProvider for GeminiCliProvider {
                 self.session_files().len(),
                 self.tmp_dir().display()
             )),
-            ProviderAvailability::NotInstalled => {
-                Some(format!("No Gemini CLI installation at {}", self.config_dir.display()))
-            }
+            ProviderAvailability::NotInstalled => Some(format!(
+                "No Gemini CLI installation at {}",
+                self.config_dir.display()
+            )),
             ProviderAvailability::UsageUnavailable => Some(format!(
                 "No Gemini CLI session files under {}",
                 self.tmp_dir().display()
@@ -368,13 +371,20 @@ impl UsageProvider for GeminiCliProvider {
             if let Some(cutoff) = request.since_ms {
                 if let Some(last_updated) = root_timestamp(&document) {
                     if last_updated < cutoff {
-                        next.extra.insert(format!("mtime:{}", key), mtime.to_string());
+                        next.extra
+                            .insert(format!("mtime:{}", key), mtime.to_string());
                         continue;
                     }
                 }
             }
 
-            let parsed = parse_session(&document, &key, request.since_ms, request.registry, payment_mode);
+            let parsed = parse_session(
+                &document,
+                &key,
+                request.since_ms,
+                request.registry,
+                payment_mode,
+            );
             scanned += parsed.scanned;
             skipped += parsed.skipped;
 
@@ -389,10 +399,14 @@ impl UsageProvider for GeminiCliProvider {
                 records.push(record);
             }
 
-            next.extra.insert(format!("mtime:{}", key), mtime.to_string());
+            // Session documents are re-read whole, so a file that has been
+            // started is always consumed completely before its mtime watermark
+            // advances. Truncating at the end (the previous behaviour) lost the
+            // tail of a file that was already marked as imported.
+            next.extra
+                .insert(format!("mtime:{}", key), mtime.to_string());
         }
 
-        records.truncate(request.limit);
         info!(
             "Gemini CLI: scanned {} turn(s), imported {} record(s)",
             scanned,
@@ -502,7 +516,8 @@ mod tests {
 
     #[test]
     fn reports_not_installed_when_missing() {
-        let provider = GeminiCliProvider::with_config_dir(PathBuf::from("/definitely/missing/gemini"));
+        let provider =
+            GeminiCliProvider::with_config_dir(PathBuf::from("/definitely/missing/gemini"));
         assert_eq!(provider.availability(), ProviderAvailability::NotInstalled);
     }
 
@@ -511,12 +526,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "ftm-gemini-empty-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            crate::test_support::unique_id()
         ));
         std::fs::create_dir_all(dir.join("tmp")).unwrap();
 
         let provider = GeminiCliProvider::with_config_dir(dir.clone());
-        assert_eq!(provider.availability(), ProviderAvailability::UsageUnavailable);
+        assert_eq!(
+            provider.availability(),
+            ProviderAvailability::UsageUnavailable
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -526,7 +544,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "ftm-gemini-inc-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            crate::test_support::unique_id()
         ));
         let chats = dir.join("tmp").join("hash").join("chats");
         std::fs::create_dir_all(&chats).unwrap();
@@ -550,7 +568,10 @@ mod tests {
                 limit: 1_000,
             })
             .unwrap();
-        assert!(second.records.is_empty(), "unchanged session must not be re-imported");
+        assert!(
+            second.records.is_empty(),
+            "unchanged session must not be re-imported"
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }

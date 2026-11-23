@@ -4,114 +4,122 @@ import { formatBilling, formatCurrency, formatTokens, isUnpriced } from '../type
 interface ModelUsageTableProps {
   models: ModelUsageType[];
   status: ProviderStatus[];
+  /** Cap the visible rows; the panel scrolls. */
+  limit?: number;
 }
-
-const SOURCE_COLORS: Record<string, string> = {
-  ftm_override: 'bg-green',
-  litellm: 'bg-cyan',
-  litellm_cached: 'bg-cyan',
-  provider_reported: 'bg-warning',
-  unknown: 'bg-red',
-};
 
 const SOURCE_LABELS: Record<string, string> = {
-  ftm_override: 'FTM',
-  litellm: 'LITELLM',
-  litellm_cached: 'LITELLM',
-  provider_reported: 'PROVIDER',
-  unknown: 'UNKNOWN',
+  ftm_override: 'curated',
+  litellm: 'litellm',
+  litellm_cached: 'litellm',
+  provider_reported: 'reported',
+  unknown: 'none',
 };
 
-function PricingSourceDot({ source }: { source: string | null }) {
-  if (!source) return null;
-  const color = SOURCE_COLORS[source] ?? 'bg-muted';
-  const label = SOURCE_LABELS[source] ?? source.toUpperCase();
-  return (
-    <span
-      className={`inline-block w-1.5 h-1.5 rounded-full ${color} ml-1.5 flex-shrink-0`}
-      title={label}
-    />
-  );
-}
-
 /**
- * `PROVIDER  MODEL  TOKENS  ACTUAL / BILLING  REFERENCE  STATUS`
+ * Ranked model usage.
  *
- * The billing column is provider-aware: a subscription provider shows `N/A`, a
- * credit-metered provider shows its units, and a promotional provider shows
- * `$0.00` — which is a price, not a guess.
+ * A model with no pricing entry is marked `unpriced` where its cost would be.
+ * That is a statement about the data, not a zero — the row keeps its tokens and
+ * loses its cost rather than pretending the usage was free. An empty cost cell
+ * means "this provider does not bill per token", and the reference column still
+ * says what the tokens would have cost.
  */
-export function ModelUsageTable({ models, status }: ModelUsageTableProps) {
-  if (models.length === 0) {
-    return null;
-  }
+export function ModelUsageTable({ models, status, limit = 8 }: ModelUsageTableProps) {
+  if (models.length === 0) return null;
 
   const label = (id: string) => status.find((s) => s.id === id)?.short_label ?? id.toUpperCase();
+  const visible = models.slice(0, limit);
+  const hidden = models.length - visible.length;
+  const max = Math.max(1, ...visible.map((m) => m.tokens));
 
   return (
-    <div className="terminal-box">
-      <div className="terminal-header flex justify-between">
-        <span>MODEL</span>
-        <span className="flex gap-4 sm:gap-6">
-          <span>TOKENS</span>
-          <span className="hidden sm:inline">%</span>
-          <span>ACTUAL / BILLING</span>
-          <span className="hidden sm:inline">REFERENCE</span>
+    <section className="panel">
+      <div className="panel-head">
+        <span className="label">Models</span>
+        <span className="mono text-[10px] text-bone-3">
+          {models.length} in range{hidden > 0 ? ` · ${hidden} more` : ''}
         </span>
       </div>
 
-      <div className="mt-2 overflow-x-auto">
-        {models.map((m) => {
+      <div className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 border-b border-hair px-4 py-1.5 sm:grid-cols-[minmax(0,1fr)_auto_minmax(40px,1.1fr)_auto_auto]">
+        <span className="label">Model</span>
+        <span className="label text-right">Tokens</span>
+        <span className="label hidden sm:block">Share</span>
+        <span className="label text-right">Actual</span>
+        <span className="label hidden text-right sm:block">Reference</span>
+      </div>
+
+      <div className="max-h-[266px] overflow-y-auto">
+        {visible.map((m) => {
           const unpriced = isUnpriced(m.pricing_status);
           const billing = formatBilling(m.billing_units, m.billing_unit);
           return (
-            <div key={`${m.provider}:${m.model}`} className="provider-row min-w-[340px]">
-              <span className="flex items-center gap-2 min-w-0">
-                <span className="text-cyan text-xs whitespace-nowrap">{label(m.provider)}</span>
-                <span
-                  className="text-text font-medium text-sm truncate max-w-[120px] sm:max-w-[180px]"
-                  title={m.model}
-                >
-                  {m.model}
-                </span>
-                {unpriced && (
+            <div
+              key={`${m.provider}:${m.model}`}
+              className="row grid-cols-[minmax(0,1fr)_auto_auto] sm:grid-cols-[minmax(0,1fr)_auto_minmax(40px,1.1fr)_auto_auto]"
+            >
+              <span className="flex min-w-0 flex-col gap-0.5">
+                <span className="flex min-w-0 items-baseline gap-1.5">
+                  <span className="label shrink-0">{label(m.provider)}</span>
                   <span
-                    className="text-warning text-xs whitespace-nowrap"
-                    title="Unknown model — no pricing entry. Never assumed free."
+                    className="mono truncate text-[11.5px] text-bone"
+                    title={`${m.model} — priced by ${
+                      SOURCE_LABELS[m.pricing_source ?? 'unknown'] ?? m.pricing_source
+                    }`}
                   >
-                    UNKNOWN
+                    {m.model}
                   </span>
-                )}
-                <PricingSourceDot source={m.pricing_source} />
+                </span>
+                <span className="flex items-baseline gap-1.5">
+                  {unpriced ? (
+                    <span className="label text-needle">unpriced</span>
+                  ) : (
+                    <span className="label">
+                      {SOURCE_LABELS[m.pricing_source ?? 'unknown'] ?? m.pricing_source}
+                    </span>
+                  )}
+                  <span className="mono text-[9.5px] text-bone-3">
+                    {m.percentage.toFixed(1)}% of range
+                  </span>
+                </span>
               </span>
-              <span className="flex gap-4 sm:gap-6 items-center">
-                <span className="text-green w-20 text-right">{formatTokens(m.tokens)}</span>
-                <span className="text-muted w-12 text-right hidden sm:inline">
-                  {m.percentage.toFixed(1)}%
+
+              <span className="mono text-right text-[11.5px] text-bone-2">
+                {formatTokens(m.tokens)}
+              </span>
+
+              <span className="hidden items-center sm:flex">
+                <span className="measure w-full">
+                  <span
+                    className="measure-fill"
+                    style={{
+                      width: `${(m.tokens / max) * 100}%`,
+                      background: unpriced ? 'var(--color-hair-hi)' : 'var(--color-bone-2)',
+                    }}
+                  />
                 </span>
-                <span
-                  className={`w-20 text-right ${
-                    m.actual_cost == null && billing === '—' ? 'text-muted' : 'text-green'
-                  }`}
-                  title={m.billing_metric_name ?? undefined}
-                >
-                  {m.actual_cost == null ? billing : formatCurrency(m.actual_cost)}
-                </span>
-                <span className="text-warning w-16 text-right hidden sm:inline">
-                  {formatCurrency(m.reference_value)}
-                </span>
+              </span>
+
+              <span className="min-w-[62px] text-right">
+                {m.actual_cost != null ? (
+                  <span className="mono text-[11px] text-needle">
+                    {formatCurrency(m.actual_cost)}
+                  </span>
+                ) : unpriced ? (
+                  <span className="mono text-[11px] text-bone-3">—</span>
+                ) : (
+                  <span className="mono text-[11px] text-bone-3">{billing}</span>
+                )}
+              </span>
+
+              <span className="mono hidden min-w-[62px] text-right text-[11px] text-bone-3 sm:inline">
+                {formatCurrency(m.reference_value)}
               </span>
             </div>
           );
         })}
       </div>
-
-      <div className="mt-2 pt-2 border-t border-border">
-        <span className="text-xs text-muted">
-          REFERENCE = equivalent paid API value. N/A = no reference pricing configured.
-          UNKNOWN = the model is missing from the pricing registry, so no cost is claimed.
-        </span>
-      </div>
-    </div>
+    </section>
   );
 }

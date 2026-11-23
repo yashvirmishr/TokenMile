@@ -151,11 +151,32 @@ export interface ActivityEntry {
   billing_unit: string;
 }
 
+/** One chart bucket for one provider. Only buckets with usage are returned. */
+export interface SeriesPoint {
+  key: string;
+  provider: string;
+  tokens: number;
+  requests: number;
+}
+
+/**
+ * The dashboard chart series.
+ *
+ * `granularity` decides the axis: an hour-by-hour strip for today, days for a
+ * week or month, weeks for all time. The backend emits only buckets that have
+ * usage; the chart zero-fills the axis so a quiet period stays visible.
+ */
+export interface UsageSeries {
+  granularity: 'hour' | 'day' | 'week';
+  points: SeriesPoint[];
+}
+
 export interface DashboardData {
   summary: UsageSummary;
   provider_usage: ProviderUsage[];
   model_usage: ModelUsage[];
   activity: ActivityEntry[];
+  series: UsageSeries;
   providers: ProviderStatus[];
 }
 
@@ -192,6 +213,7 @@ export interface AppPreferences {
   disabled_providers: string[];
   /** First-import window in days; 0 means all available history. */
   backfill_days: number;
+  /** Active UI theme key, e.g. `builtin:instrument` or `user:my-theme`. */
 }
 
 export interface WindowState {
@@ -267,9 +289,38 @@ export function getDaysForRange(range: TimeRange): number | null {
 }
 
 export function formatTokens(n: number): string {
+  if (n >= 1_000_000_000) return `${(n / 1_000_000_000).toFixed(2)}B`;
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
   if (n >= 1_000) return `${(n / 1_000).toFixed(1)}K`;
   return n.toString();
+}
+
+/**
+ * A number split into its figure and unit, for the instrument readout.
+ *
+ * `4_406_947_123` → `{ value: '4.41', unit: 'B' }`, rendered as one large
+ * numeral with a small raised unit so the magnitude reads before the digits do.
+ */
+export function splitMagnitude(n: number): { value: string; unit: string } {
+  if (n >= 1_000_000_000) return { value: (n / 1_000_000_000).toFixed(2), unit: 'B' };
+  if (n >= 1_000_000) return { value: (n / 1_000_000).toFixed(1), unit: 'M' };
+  if (n >= 10_000) return { value: (n / 1_000).toFixed(0), unit: 'K' };
+  if (n >= 1_000) return { value: (n / 1_000).toFixed(1), unit: 'K' };
+  return { value: n.toLocaleString('en-US'), unit: '' };
+}
+
+/** Provider series colours, in catalogue order. */
+export const SERIES_COLORS = [
+  'var(--color-series-1)',
+  'var(--color-series-2)',
+  'var(--color-series-3)',
+  'var(--color-series-4)',
+  'var(--color-series-5)',
+  'var(--color-series-6)',
+];
+
+export function seriesColor(index: number): string {
+  return SERIES_COLORS[((index % SERIES_COLORS.length) + SERIES_COLORS.length) % SERIES_COLORS.length];
 }
 
 /** `null` renders as N/A: an unestablished cost is not $0.00. */
@@ -291,19 +342,7 @@ function trimNumber(n: number): string {
   return Number.isInteger(n) ? n.toString() : n.toFixed(2);
 }
 
-export function formatRate(rates: PricingRates): string {
-  return `$${rates.input_per_million}/$${rates.output_per_million}/$${rates.cached_per_million}`;
-}
-
-/** "in / out / cached" per-million rates for terminal-style rows. */
-export function formatRateDetail(rates: PricingRates): string {
-  return `in ${rates.input_per_million} / out ${rates.output_per_million} / cached ${rates.cached_per_million}`;
-}
-
-export function formatThousands(n: number): string {
-  return n.toLocaleString('en-US');
-}
-
+/** Relative age for the activity tape: `now`, `7m`, `3h`, `2d`. */
 export function formatTimestamp(ts: string): string {
   const date = new Date(ts);
   const now = new Date();
@@ -316,35 +355,4 @@ export function formatTimestamp(ts: string): string {
   if (diffHrs < 24) return `${diffHrs}h`;
   const diffDays = Math.floor(diffHrs / 24);
   return `${diffDays}d`;
-}
-
-/** Payment-mode label shown next to a provider. */
-export function paymentModeLabel(mode: string): string {
-  switch (mode) {
-    case 'api': return 'API';
-    case 'subscription': return 'SUBSCRIPTION';
-    case 'promotional': return 'PROMOTIONAL';
-    default: return 'UNKNOWN';
-  }
-}
-
-/** Marker glyph per detection state. */
-export function providerGlyph(state: ProviderState): string {
-  switch (state) {
-    case 'connected': return '●';
-    case 'disabled': return '−';
-    case 'not_installed': return '○';
-    case 'usage_unavailable': return '!';
-    case 'unsupported': return '?';
-    case 'error': return '!';
-  }
-}
-
-export function providerGlyphClass(state: ProviderState): string {
-  switch (state) {
-    case 'connected': return 'text-green';
-    case 'disabled': return 'text-muted';
-    case 'error': return 'text-error';
-    default: return 'text-warning';
-  }
 }

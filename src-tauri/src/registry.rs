@@ -183,7 +183,10 @@ impl RegistryState {
                 }
             }
             Err(e) => {
-                info!("No pricing cache found: {}. Will download on first refresh.", e);
+                info!(
+                    "No pricing cache found: {}. Will download on first refresh.",
+                    e
+                );
             }
         }
     }
@@ -229,9 +232,17 @@ impl RegistryState {
     }
 
     /// Refresh the registry from the network.
-    /// Returns Ok(true) if a new registry was loaded, Ok(false) if unchanged.
+    /// Returns Ok(true) if the registry content actually changed, Ok(false) when
+    /// the download matched what is already loaded.
     pub fn refresh(&self) -> Result<bool, String> {
         let new_registry = download_and_parse()?;
+
+        let previous = self
+            .registry
+            .lock()
+            .ok()
+            .and_then(|slot| slot.as_ref().map(fingerprint));
+        let changed = previous != Some(fingerprint(&new_registry));
 
         // Atomic replacement: validate, then write cache, then replace in-memory.
         save_cache(&self.cache_path, &new_registry)?;
@@ -244,10 +255,10 @@ impl RegistryState {
         }
 
         info!(
-            "Pricing registry refreshed: {} models (version {})",
-            new_count, new_version
+            "Pricing registry refreshed: {} models (version {}, changed: {})",
+            new_count, new_version, changed
         );
-        Ok(true)
+        Ok(changed)
     }
 
     /// Look up pricing for a model (lowercased model ID).
@@ -263,7 +274,8 @@ impl RegistryState {
         match registry {
             Some(r) => match r.as_ref() {
                 Some(reg) => {
-                    let mut entries: Vec<DynamicPricingEntry> = reg.entries.values().cloned().collect();
+                    let mut entries: Vec<DynamicPricingEntry> =
+                        reg.entries.values().cloned().collect();
                     entries.sort_by(|a, b| a.model_id.cmp(&b.model_id));
                     entries
                 }
@@ -377,13 +389,9 @@ fn parse_entry(model_id: &str, value: &serde_json::Value) -> Option<DynamicPrici
         .and_then(|v| v.as_f64())
         .unwrap_or(0.0);
 
-    let max_input = obj
-        .get("max_input_tokens")
-        .and_then(|v| v.as_i64());
+    let max_input = obj.get("max_input_tokens").and_then(|v| v.as_i64());
 
-    let max_output = obj
-        .get("max_output_tokens")
-        .and_then(|v| v.as_i64());
+    let max_output = obj.get("max_output_tokens").and_then(|v| v.as_i64());
 
     let source = obj
         .get("source")
@@ -404,7 +412,7 @@ fn parse_entry(model_id: &str, value: &serde_json::Value) -> Option<DynamicPrici
         return None;
     }
 
-    let last_part = model_id.split('/').last().unwrap_or(model_id);
+    let last_part = model_id.rsplit('/').next().unwrap_or(model_id);
     let display_name = if let Some(first) = last_part.chars().next() {
         let capitalized: String = first.to_uppercase().collect();
         format!("{}{}", capitalized, &last_part[first.len_utf8()..])
@@ -427,13 +435,33 @@ fn parse_entry(model_id: &str, value: &serde_json::Value) -> Option<DynamicPrici
 // Cache management
 // ──────────────────────────────────────────────────────────────────────
 
+/// Content fingerprint of a registry, used to tell a real refresh from a
+/// re-download of the same data.
+fn fingerprint(registry: &PricingRegistry) -> u64 {
+    use std::hash::{Hash, Hasher};
+
+    let mut ids: Vec<&str> = registry.entries.keys().map(String::as_str).collect();
+    ids.sort_unstable();
+
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for id in ids {
+        id.hash(&mut hasher);
+        if let Some(entry) = registry.entries.get(id) {
+            entry.rates.input_per_million.to_bits().hash(&mut hasher);
+            entry.rates.output_per_million.to_bits().hash(&mut hasher);
+            entry.rates.cached_per_million.to_bits().hash(&mut hasher);
+        }
+    }
+    hasher.finish()
+}
+
 /// Load the cached pricing registry from disk.
 fn load_cache(path: &Path) -> Result<PricingRegistry, String> {
-    let data = std::fs::read_to_string(path)
-        .map_err(|e| format!("Failed to read cache file: {}", e))?;
+    let data =
+        std::fs::read_to_string(path).map_err(|e| format!("Failed to read cache file: {}", e))?;
 
-    let registry: PricingRegistry = serde_json::from_str(&data)
-        .map_err(|e| format!("Failed to parse cache file: {}", e))?;
+    let registry: PricingRegistry =
+        serde_json::from_str(&data).map_err(|e| format!("Failed to parse cache file: {}", e))?;
 
     Ok(registry)
 }
@@ -447,12 +475,10 @@ fn save_cache(path: &Path, registry: &PricingRegistry) -> Result<(), String> {
     let data = serde_json::to_string_pretty(registry)
         .map_err(|e| format!("Failed to serialize registry: {}", e))?;
 
-    std::fs::write(&tmp_path, data)
-        .map_err(|e| format!("Failed to write cache file: {}", e))?;
+    std::fs::write(&tmp_path, data).map_err(|e| format!("Failed to write cache file: {}", e))?;
 
     // Atomic rename.
-    std::fs::rename(&tmp_path, path)
-        .map_err(|e| format!("Failed to rename cache file: {}", e))?;
+    std::fs::rename(&tmp_path, path).map_err(|e| format!("Failed to rename cache file: {}", e))?;
 
     Ok(())
 }
@@ -549,10 +575,7 @@ mod tests {
 
     #[test]
     fn cache_atomic_write() {
-        let dir = std::env::temp_dir().join(format!(
-            "ftm-registry-test-{}",
-            std::process::id()
-        ));
+        let dir = std::env::temp_dir().join(format!("ftm-registry-test-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
 

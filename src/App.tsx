@@ -6,17 +6,25 @@ import { TitleBar } from './components/TitleBar';
 import { ProviderTable } from './components/ProviderTable';
 import { ModelUsageTable } from './components/ModelUsageTable';
 import { ValueDisplay } from './components/ValueDisplay';
-import { TimeRangeTabs } from './components/TimeRangeTabs';
 import { ActivityFeed } from './components/ActivityFeed';
 import { ProviderStatusPanel } from './components/ProviderStatus';
 import { SettingsPanel } from './components/SettingsPanel';
 import { PricingPanel } from './components/PricingPanel';
-import { SyncBanner } from './components/SyncBanner';
-import type { UsageSummary } from './types';
-import { formatCurrency } from './types';
+import { SyncStatus } from './components/SyncStatus';
+import { UsageCalendar } from './components/UsageCalendar';
+import { UsageHeadline } from './components/UsageHeadline';
+import { UsageChart } from './components/UsageChart';
+import type { TimeRange } from './types';
 
 /** Matches `sync::BACKGROUND_SYNC_INTERVAL_SECS` in the Rust backend. */
 const SYNC_INTERVAL_SECS = 30;
+
+const RANGE_LABEL: Record<TimeRange, string> = {
+  today: 'today',
+  week: 'last 7 days',
+  month: 'last 30 days',
+  all: 'all time',
+};
 
 function App() {
   const dashboard = useDashboard();
@@ -29,7 +37,6 @@ function App() {
   const { toggleAlwaysOnTop, hideToTray, quit } = desktop;
 
   const providers = dashboard.data?.providers ?? [];
-  const status = providers;
 
   /**
    * Provider tabs are derived from the providers the backend reports, so adding
@@ -38,7 +45,7 @@ function App() {
    */
   const tabs = useMemo(
     () => [
-      { id: ALL_PROVIDERS, label: 'ALL', key: 'q' },
+      { id: ALL_PROVIDERS, label: 'All', key: 'q' },
       ...providers.map((provider) => ({
         id: provider.id,
         label: provider.short_label,
@@ -98,23 +105,36 @@ function App() {
 
   if (dashboard.loading && !dashboard.data) {
     return (
-      <div className="w-full h-full flex items-center justify-center bg-bg">
-        <div className="text-muted text-sm font-mono">
-          <span className="text-green pulse">●</span> Loading...
-        </div>
+      <div className="flex h-full w-full flex-col items-center justify-center gap-3">
+        <span className="live-dot" />
+        <span className="label">measuring</span>
       </div>
     );
   }
 
   const panelOpen = settingsOpen || pricingOpen;
+  const filter = dashboard.providerFilter;
+  const providerLabel =
+    filter === ALL_PROVIDERS
+      ? null
+      : providers.find((p) => p.id === filter)?.short_label ?? filter;
+  const filterLabel = providerLabel ?? RANGE_LABEL[dashboard.timeRange];
+
+  const summary = dashboard.data?.summary ?? null;
+  const providerRows = dashboard.data?.provider_usage ?? [];
+  const models = dashboard.data?.model_usage ?? [];
 
   return (
-    <div className="w-full h-full flex flex-col bg-bg overflow-hidden">
+    <div className="relative z-10 flex h-full w-full flex-col">
       <TitleBar
         syncing={dashboard.syncing}
         alwaysOnTop={desktop.windowState?.always_on_top ?? false}
         settingsOpen={settingsOpen}
         pricingOpen={pricingOpen}
+        range={dashboard.timeRange}
+        rangeDisabled={panelOpen}
+        lastSyncAge={dashboard.lastSync ? ageOf(dashboard.lastSync.finished_at) : null}
+        onRangeChange={dashboard.setTimeRange}
         onSync={sync}
         onToggleSettings={() => {
           setPricingOpen(false);
@@ -127,164 +147,153 @@ function App() {
         onHide={hideToTray}
       />
 
-      <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-3">
-        {settingsOpen && (
-          <SettingsPanel
-            windowState={desktop.windowState}
-            prefs={desktop.prefs}
-            providers={providers}
-            futureProviders={desktop.futureProviders}
-            pricingVersion={pricing.registry?.version ?? null}
-            registryModels={pricing.registry?.registry_models ?? 0}
-            syncIntervalSecs={SYNC_INTERVAL_SECS}
-            onToggleAlwaysOnTop={toggleAlwaysOnTop}
-            onToggleProvider={async (id, enabled) => {
-              await desktop.setProviderEnabled(id, enabled);
-              await dashboard.refresh();
-            }}
-            onSetBackfillDays={desktop.setBackfillDays}
-            onHide={hideToTray}
-            onQuit={quit}
-            onClose={() => setSettingsOpen(false)}
+      <main className="flex-1 overflow-y-auto">
+        <div className="mx-auto flex w-full max-w-[1280px] flex-col gap-3 p-3 pb-6 sm:p-4 sm:pb-8">
+          {settingsOpen && (
+            <SettingsPanel
+              windowState={desktop.windowState}
+              prefs={desktop.prefs}
+              providers={providers}
+              futureProviders={desktop.futureProviders}
+              pricingVersion={pricing.registry?.version ?? null}
+              registryModels={pricing.registry?.registry_models ?? 0}
+              syncIntervalSecs={SYNC_INTERVAL_SECS}
+              onToggleAlwaysOnTop={toggleAlwaysOnTop}
+              onToggleProvider={async (id, enabled) => {
+                await desktop.setProviderEnabled(id, enabled);
+                await dashboard.refresh();
+              }}
+              onSetBackfillDays={desktop.setBackfillDays}
+              onHide={hideToTray}
+              onQuit={quit}
+              onClose={() => setSettingsOpen(false)}
+            />
+          )}
+
+          {pricingOpen && (
+            <PricingPanel
+              registry={pricing.registry}
+              loading={pricing.loading}
+              error={pricing.error}
+              onReload={pricing.reload}
+              onClose={() => setPricingOpen(false)}
+            />
+          )}
+
+          {(desktop.error || dashboard.error) && (
+            <div className="panel border-alert/40 px-4 py-2.5">
+              <span className="label text-alert">error</span>
+              <p className="mt-1 text-[11px] text-bone-2">{desktop.error ?? dashboard.error}</p>
+            </div>
+          )}
+
+          <SyncStatus
+            report={dashboard.lastSync}
+            hiddenNotice={desktop.hiddenNotice}
+            onDismissHidden={desktop.dismissHiddenNotice}
           />
-        )}
 
-        {pricingOpen && (
-          <PricingPanel
-            registry={pricing.registry}
-            loading={pricing.loading}
-            error={pricing.error}
-            onReload={pricing.reload}
-            onClose={() => setPricingOpen(false)}
-          />
-        )}
+          <div
+            className="reveal grid gap-3 lg:grid-cols-[minmax(0,0.92fr)_minmax(0,1.08fr)]"
+            style={{ ['--reveal-delay' as string]: '0ms' }}
+          >
+            <UsageHeadline
+              summary={summary}
+              range={dashboard.timeRange}
+              modelCount={models.length}
+              providerCount={providerRows.length}
+            />
+            <UsageChart
+              series={dashboard.data?.series ?? null}
+              range={dashboard.timeRange}
+              providers={providers}
+              filterLabel={filterLabel}
+            />
+          </div>
 
-        {desktop.error && (
-          <div className="terminal-box text-xs text-error">{desktop.error}</div>
-        )}
+          <div className="reveal" style={{ ['--reveal-delay' as string]: '40ms' }}>
+            <UsageCalendar provider={providerLabel ? filter : null} providerLabel={providerLabel} />
+          </div>
 
-        <SyncBanner
-          report={dashboard.lastSync}
-          hiddenNotice={desktop.hiddenNotice}
-          onDismissHidden={desktop.dismissHiddenNotice}
-        />
+          <div className="reveal" style={{ ['--reveal-delay' as string]: '70ms' }}>
+            <ValueDisplay summary={summary} />
+          </div>
 
-        <StatsSummary summary={dashboard.data?.summary ?? null} />
+          {/* Scope of the breakdown below: which providers are being read. */}
+          <div
+            className="reveal flex flex-wrap items-center gap-1.5"
+            style={{ ['--reveal-delay' as string]: '110ms' }}
+          >
+            <span className="label mr-1">scope</span>
+            {tabs.map((tab) => (
+              <button
+                key={tab.id}
+                onClick={() => dashboard.setProviderFilter(tab.id)}
+                className={`chip ${
+                  dashboard.providerFilter === tab.id ? 'chip-filter-on' : ''
+                }`}
+                title={tab.key ? `Show all providers [${tab.key}]` : `Only ${tab.label}`}
+              >
+                {tab.label}
+              </button>
+            ))}
+            <span className="mono ml-auto text-[9.5px] text-bone-3">{filterLabel}</span>
+          </div>
 
-        <div className="divider" />
+          <div
+            className="reveal grid gap-3 lg:grid-cols-[minmax(0,1.2fr)_minmax(0,1fr)]"
+            style={{ ['--reveal-delay' as string]: '150ms' }}
+          >
+            <ProviderTable
+              providers={providerRows}
+              status={providers}
+              rangeLabel={filterLabel}
+            />
+            <ActivityFeed entries={dashboard.data?.activity ?? []} status={providers} />
+          </div>
 
-        <div className="flex gap-1 flex-wrap">
-          {tabs.map((tab) => (
-            <button
-              key={tab.id}
-              onClick={() => dashboard.setProviderFilter(tab.id)}
-              className={`tab ${dashboard.providerFilter === tab.id ? 'active' : ''}`}
-            >
-              {tab.key ? <span className="text-muted">[{tab.key}]</span> : null} {tab.label}
-            </button>
-          ))}
+          <div className="reveal" style={{ ['--reveal-delay' as string]: '190ms' }}>
+            <ModelUsageTable models={models} status={providers} />
+          </div>
+
+          <div className="reveal" style={{ ['--reveal-delay' as string]: '230ms' }}>
+            <ProviderStatusPanel providers={providers} />
+          </div>
+
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-1 pt-1">
+            <Hint keys="1–4" text="range" />
+            <Hint keys="r" text="sync" />
+            <Hint keys="p" text="pricing" />
+            <Hint keys="s" text="settings" />
+            <Hint keys="h" text="tray" />
+            <span className="mono ml-auto text-[9px] text-bone-3">
+              local only · nothing leaves this machine
+            </span>
+          </div>
         </div>
-
-        <ProviderTable providers={dashboard.data?.provider_usage ?? []} status={status} />
-
-        <div className="divider" />
-
-        <ModelUsageTable models={dashboard.data?.model_usage ?? []} status={status} />
-
-        {dashboard.data?.model_usage && dashboard.data.model_usage.length > 0 && (
-          <div className="divider" />
-        )}
-
-        <ValueDisplay summary={dashboard.data?.summary ?? null} />
-
-        <div className="divider" />
-
-        <TimeRangeTabs
-          active={dashboard.timeRange}
-          onChange={dashboard.setTimeRange}
-          disabled={panelOpen}
-        />
-
-        <div className="divider" />
-
-        <ActivityFeed entries={dashboard.data?.activity ?? []} status={status} />
-
-        <div className="divider" />
-
-        <ProviderStatusPanel providers={providers} />
-      </div>
+      </main>
     </div>
   );
 }
 
-function StatsSummary({ summary }: { summary: UsageSummary | null }) {
-  if (!summary) return null;
-
-  const unpriced = summary.unpriced_records ?? 0;
-  // Only when *every* record is unpriced do we have no cost to report at all.
-  const nothingPriced = summary.request_count > 0 && unpriced >= summary.request_count;
-  const marker = unpriced > 0 ? '*' : '';
-  const actualKnown = !nothingPriced && summary.unbilled_records < summary.request_count;
-  const referenceKnown = !nothingPriced && summary.reference_value > 0;
-
+function Hint({ keys, text }: { keys: string; text: string }) {
   return (
-    <div className="space-y-2">
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-2">
-        <div className="card p-2 sm:p-3">
-          <div className="text-xs text-muted mb-1">TOKENS</div>
-          <div className="text-lg font-mono text-green">
-            {summary.total_tokens.toLocaleString()}
-          </div>
-        </div>
-        <div className="card p-2 sm:p-3">
-          <div className="text-xs text-muted mb-1">REQUESTS</div>
-          <div className="text-lg font-mono text-green">
-            {summary.request_count.toLocaleString()}
-          </div>
-        </div>
-        <div className="card p-2 sm:p-3">
-          <div className="text-xs text-muted mb-1">ACTUAL COST</div>
-          <div className={`text-lg font-mono ${actualKnown ? 'text-green' : 'text-muted'}`}>
-            {actualKnown ? `${formatCurrency(summary.actual_cost)}${marker}` : 'N/A'}
-          </div>
-        </div>
-        <div className="card p-2 sm:p-3">
-          <div className="text-xs text-muted mb-1">REFERENCE VALUE</div>
-          <div className={`text-lg font-mono ${referenceKnown ? 'text-cyan' : 'text-muted'}`}>
-            {referenceKnown ? `${formatCurrency(summary.reference_value)}${marker}` : 'N/A'}
-          </div>
-        </div>
-        <div className="card p-2 sm:p-3">
-          <div className="text-xs text-muted mb-1">BILLED UNITS</div>
-          <div className="text-lg font-mono text-cyan">
-            {summary.billing_units > 0 ? `${summary.billing_units.toFixed(0)} cr` : '—'}
-          </div>
-        </div>
-      </div>
-
-      {summary.unbilled_records > 0 && (
-        <div className="terminal-box text-xs flex items-start gap-2">
-          <span className="text-cyan">SUBSCRIPTION</span>
-          <span className="text-muted flex-1">
-            {summary.unbilled_records} of {summary.request_count} record(s) reported no
-            monetary cost, so ACTUAL COST covers only the priced usage.
-          </span>
-        </div>
-      )}
-
-      {unpriced > 0 && (
-        <div className="terminal-box text-xs flex items-start gap-2">
-          <span className="text-warning">PRICING: UNKNOWN</span>
-          <span className="text-muted flex-1">
-            {unpriced} of {summary.request_count} record(s) ({' '}
-            {summary.unpriced_tokens.toLocaleString()} tokens) use a model that is not in
-            the pricing registry. They are excluded from the totals above instead of being
-            counted as $0 — open [p] pricing for details.
-          </span>
-        </div>
-      )}
-    </div>
+    <span className="flex items-baseline gap-1.5">
+      <span className="key">{keys}</span>
+      <span className="label">{text}</span>
+    </span>
   );
+}
+
+/** "12s", "4m" — the age of the last sync pass. */
+function ageOf(finishedAtMs: number): string | null {
+  if (!finishedAtMs) return null;
+  const seconds = Math.max(0, Math.round((Date.now() - finishedAtMs) / 1000));
+  if (seconds < 5) return 'just now';
+  if (seconds < 60) return `${seconds}s ago`;
+  const minutes = Math.round(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  return `${Math.round(minutes / 60)}h ago`;
 }
 
 export default App;

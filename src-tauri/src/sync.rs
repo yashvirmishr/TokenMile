@@ -122,7 +122,7 @@ fn format_thousands(n: i64) -> String {
     let digits = n.abs().to_string();
     let mut out = String::new();
     for (index, ch) in digits.chars().enumerate() {
-        if index > 0 && (digits.len() - index) % 3 == 0 {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
             out.push(',');
         }
         out.push(ch);
@@ -147,6 +147,11 @@ struct FetchedOutcome {
     index: usize,
     provider: String,
     name: String,
+    /// `true` when the provider was deliberately not run (disabled, or no
+    /// readable source) rather than failing. Carried as a flag instead of being
+    /// re-derived from the message text, so wording changes cannot silently
+    /// reclassify a failure as a skip.
+    skipped: bool,
     outcome: Result<(FetchOutcome, i64), String>,
 }
 
@@ -172,7 +177,7 @@ pub fn sync_all(state: &AppState) -> SyncReport {
     let prefs_ref = &prefs;
     let state_ref: &AppState = state;
 
-    let worker_count = providers.len().min(MAX_PARALLEL_FETCHES).max(1);
+    let worker_count = providers.len().clamp(1, MAX_PARALLEL_FETCHES);
     std::thread::scope(|scope| {
         for _ in 0..worker_count {
             scope.spawn(move || loop {
@@ -189,6 +194,7 @@ pub fn sync_all(state: &AppState) -> SyncReport {
                         index: position,
                         provider: id,
                         name,
+                        skipped: true,
                         outcome: Err("provider disabled in settings".to_string()),
                     });
                     continue;
@@ -199,6 +205,7 @@ pub fn sync_all(state: &AppState) -> SyncReport {
                         index: position,
                         provider: id,
                         name,
+                        skipped: true,
                         outcome: Err(format!(
                             "no readable source ({})",
                             provider
@@ -225,6 +232,7 @@ pub fn sync_all(state: &AppState) -> SyncReport {
                     index: position,
                     provider: id,
                     name,
+                    skipped: false,
                     outcome,
                 });
             });
@@ -281,7 +289,8 @@ fn fetch_one(
 ) -> Result<FetchOutcome, String> {
     let cursor_json = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
-        db.get_sync_cursor(provider.id()).map_err(|e| e.to_string())?
+        db.get_sync_cursor(provider.id())
+            .map_err(|e| e.to_string())?
     };
 
     let cursor: Option<ProviderCursor> = cursor_json
@@ -311,7 +320,7 @@ fn persist_outcome(state: &AppState, entry: FetchedOutcome) -> ProviderSyncResul
 
     match entry.outcome {
         Err(message) => {
-            let skipped = message.contains("disabled in settings") || message.contains("no readable source");
+            let skipped = entry.skipped;
             if let Ok(db) = state.db.lock() {
                 let _ = db.update_sync_state(
                     &entry.provider,
@@ -398,21 +407,30 @@ pub fn publish(app: &AppHandle, report: &SyncReport) {
 
 /// Run a sync pass on the current thread and publish the result.
 ///
-/// Concurrent calls are coalesced, so a queued tray request cannot stack up
-/// work while a pass is already running.
+/// Concurrent calls are coalesced, so a queued tray request or a UI sync cannot
+/// stack up work while a pass is already running.
 pub fn sync_and_publish(app: &AppHandle) {
-    if app.state::<AppState>().syncing.swap(true, Ordering::SeqCst) {
-        info!("Sync already in progress; request ignored");
-        return;
+    let _ = sync_once_guarded(app);
+}
+
+/// Run one synchronization pass, returning its report.
+///
+/// This is the single entry point shared by the UI command, the tray item and the
+/// background scheduler, so the in-flight guard cannot be bypassed by any of
+/// them. If a pass is already running the caller gets the most recent report
+/// instead of starting a second pass over the same cursors.
+pub fn sync_once_guarded(app: &AppHandle) -> SyncReport {
+    let state = app.state::<AppState>();
+
+    if state.syncing.swap(true, Ordering::SeqCst) {
+        info!("Sync already in progress; returning the previous report");
+        return last_report(&state).unwrap_or_default();
     }
 
-    let report = {
-        let state = app.state::<AppState>();
-        sync_all(&state)
-    };
-
+    let report = sync_all(&state);
     publish(app, &report);
-    app.state::<AppState>().syncing.store(false, Ordering::SeqCst);
+    state.syncing.store(false, Ordering::SeqCst);
+    report
 }
 
 /// Run a sync pass on a background thread (used by the tray "Sync Now" item).
@@ -480,7 +498,7 @@ mod tests {
     use crate::preferences::PreferencesStore;
     use crate::provider::ProviderRegistry;
     use crate::registry::RegistryState;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::sync::atomic::{AtomicBool, AtomicU64};
     use std::sync::Arc;
 
@@ -489,7 +507,7 @@ mod tests {
             "ftm-sync-test-{}-{}-{}",
             label,
             std::process::id(),
-            Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            crate::test_support::unique_id()
         ));
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).expect("create temp dir");
@@ -514,19 +532,37 @@ mod tests {
         }
     }
 
-    const CODEX_ROLLOUT: &str = r#"{"timestamp":"2026-09-07T17:09:31.000Z","type":"turn_context","payload":{"model":"gpt-5.3-codex"}}
-{"timestamp":"2026-09-07T17:09:32.000Z","type":"event_msg","payload":{"type":"token_count","rate_limits":{"plan_type":"free"}}}
-{"timestamp":"2026-09-07T17:09:49.000Z","type":"token_usage_record","payload":{"session_id":"s1","response_id":"resp_1","usage":{"input_tokens":1000000,"output_tokens":600000,"total_tokens":1600000}}}
-"#;
+    /// A Codex rollout whose timestamps are relative to now.
+    ///
+    /// These used to be fixed dates. Because the fixture is replayed through
+    /// `sync_all`, which applies the backfill window, the hardcoded day silently
+    /// aged past the cutoff and turned the integration tests red a month later.
+    fn codex_rollout() -> String {
+        let stamp = |offset_secs: i64| {
+            (Utc::now() - chrono::Duration::seconds(offset_secs))
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+        };
 
-    fn codex_dir(root: &PathBuf) -> PathBuf {
+        format!(
+            concat!(
+                "{{\"timestamp\":\"{}\",\"type\":\"turn_context\",\"payload\":{{\"model\":\"gpt-5.3-codex\"}}}}\n",
+                "{{\"timestamp\":\"{}\",\"type\":\"event_msg\",\"payload\":{{\"type\":\"token_count\",\"rate_limits\":{{\"plan_type\":\"free\"}}}}}}\n",
+                "{{\"timestamp\":\"{}\",\"type\":\"token_usage_record\",\"payload\":{{\"session_id\":\"s1\",\"response_id\":\"resp_1\",\"usage\":{{\"input_tokens\":1000000,\"output_tokens\":600000,\"total_tokens\":1600000}}}}}}\n"
+            ),
+            stamp(30),
+            stamp(20),
+            stamp(10)
+        )
+    }
+
+    fn codex_dir(root: &Path) -> PathBuf {
         let dir = root.join("codex-sessions");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("rollout-1.jsonl"), CODEX_ROLLOUT).unwrap();
+        std::fs::write(dir.join("rollout-1.jsonl"), codex_rollout()).unwrap();
         dir
     }
 
-    fn fake_freebuff_project(dir: &PathBuf, project: &str) -> PathBuf {
+    fn fake_freebuff_project(dir: &Path, project: &str) -> PathBuf {
         let project_dir = dir.join(project);
         std::fs::create_dir_all(&project_dir).unwrap();
         let db_path = project_dir.join("desktop-v2.db");
@@ -756,8 +792,14 @@ mod tests {
         };
 
         let report = sync_all(&state);
-        assert_eq!(report.get("boom").unwrap().message, "provider sync panicked");
-        assert!(report.get("codex").unwrap().ok, "the healthy provider still ran");
+        assert_eq!(
+            report.get("boom").unwrap().message,
+            "provider sync panicked"
+        );
+        assert!(
+            report.get("codex").unwrap().ok,
+            "the healthy provider still ran"
+        );
     }
 
     #[test]
@@ -876,11 +918,21 @@ mod tests {
                 .find(|r| r.provider == descriptor.id)
                 .expect("every provider is in the report");
             if descriptor.state == "connected" {
-                assert!(result.ok, "{} is connected but failed: {}", descriptor.name, result.message);
                 assert!(
-                    result.records_synced > 0,
-                    "{} is connected but imported nothing",
-                    descriptor.name
+                    result.ok,
+                    "{} is connected but failed: {}",
+                    descriptor.name, result.message
+                );
+                // A fresh backfill only imports what falls inside the configured
+                // window, so "connected and nothing imported" is a legitimate
+                // result on a machine whose usage is older than that window (this
+                // one's Codex rollouts are). What must never happen is scanning
+                // events and importing none of them: that is a broken mapping.
+                assert!(
+                    result.records_synced > 0 || result.events_scanned == 0,
+                    "{} scanned {} event(s) and imported nothing",
+                    descriptor.name,
+                    result.events_scanned
                 );
             } else {
                 assert!(!result.ok, "{} must not report success", descriptor.name);
@@ -967,7 +1019,12 @@ mod tests {
         }
 
         // History survives: the summary must reflect what was imported.
-        let summary = state.db.lock().unwrap().get_usage_summary(None, None).unwrap();
+        let summary = state
+            .db
+            .lock()
+            .unwrap()
+            .get_usage_summary(None, None)
+            .unwrap();
         println!(
             "\nhistory: {} records, {} tokens, actual ${:.4}, reference ${:.4}, unpriced {}",
             summary.request_count,

@@ -54,9 +54,15 @@ export function useDesktop() {
     listen<WindowState>('prefs://changed', (event) => {
       setWindowState(event.payload);
       setPrefs((prev) => (prev ? { ...prev, always_on_top: event.payload.always_on_top } : prev));
-    }).then(track);
+    })
+      .then(track)
+      .catch((err) => setError(`Live window updates unavailable: ${String(err)}`));
 
-    listen('window://hidden', () => setHiddenNotice(true)).then(track);
+    listen('window://hidden', () => setHiddenNotice(true))
+      .then(track)
+      .catch(() => {
+        // The notice is a nicety; a denied listener must not break the panel.
+      });
 
     return () => {
       active = false;

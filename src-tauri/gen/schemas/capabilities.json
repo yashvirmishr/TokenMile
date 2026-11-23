@@ -1,1 +1,1 @@
-{}
+{"default":{"identifier":"default","description":"Capabilities FreeTokenMeter's own UI needs: listen for the backend's sync/window events, and read the window state it mirrors. No filesystem, shell or network permission is granted to the webview.","local":true,"windows":["main"],"permissions":["core:default"]}}

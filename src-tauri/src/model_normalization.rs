@@ -39,10 +39,7 @@ impl NormalizationMap {
     ///
     /// `alias_pairs`: list of (raw_id, canonical_id) — explicit FTM aliases.
     /// `model_ids`: all known model IDs from both the static and dynamic registries.
-    pub fn build(
-        alias_pairs: &[(&str, &str)],
-        model_ids: &[&str],
-    ) -> Self {
+    pub fn build(alias_pairs: &[(&str, &str)], model_ids: &[&str]) -> Self {
         let mut aliases = HashMap::new();
 
         // Register explicit aliases.
@@ -65,7 +62,10 @@ impl NormalizationMap {
             }
         }
 
-        Self { aliases, normalized }
+        Self {
+            aliases,
+            normalized,
+        }
     }
 
     /// Resolve a raw model ID to its canonical form.
@@ -119,7 +119,8 @@ impl NormalizationMap {
 
     /// Register an alias at runtime.
     pub fn register_alias(&mut self, raw: &str, canonical: &str) {
-        self.aliases.insert(raw.to_lowercase(), canonical.to_lowercase());
+        self.aliases
+            .insert(raw.to_lowercase(), canonical.to_lowercase());
     }
 }
 
@@ -167,10 +168,8 @@ mod tests {
 
     #[test]
     fn resolve_explicit_alias() {
-        let map = NormalizationMap::build(
-            &[("mimo-v2.5-free", "mimo-v2.5")],
-            &["mimo-v2.5", "gpt-4o"],
-        );
+        let map =
+            NormalizationMap::build(&[("mimo-v2.5-free", "mimo-v2.5")], &["mimo-v2.5", "gpt-4o"]);
         assert_eq!(map.resolve("mimo-v2.5-free"), Some("mimo-v2.5".to_string()));
     }
 
@@ -228,9 +227,18 @@ mod tests {
 
     #[test]
     fn strip_known_prefixes() {
-        assert_eq!(strip_provider_prefix("deepseek/deepseek-r1"), Some("deepseek-r1"));
-        assert_eq!(strip_provider_prefix("openrouter/xiaomi/mimo-v2.5"), Some("xiaomi/mimo-v2.5"));
+        assert_eq!(
+            strip_provider_prefix("deepseek/deepseek-r1"),
+            Some("deepseek-r1")
+        );
+        assert_eq!(
+            strip_provider_prefix("openrouter/xiaomi/mimo-v2.5"),
+            Some("xiaomi/mimo-v2.5")
+        );
         assert_eq!(strip_provider_prefix("gpt-4o"), None);
-        assert_eq!(strip_provider_prefix("bedrock/anthropic.claude-3"), Some("anthropic.claude-3"));
+        assert_eq!(
+            strip_provider_prefix("bedrock/anthropic.claude-3"),
+            Some("anthropic.claude-3")
+        );
     }
 }

@@ -165,7 +165,10 @@ pub fn parse_rollout_lines<'a>(
             malformed += 1;
             out.skipped += 1;
             if malformed > MAX_MALFORMED_LINES {
-                warn!("Codex rollout has too many malformed lines; stopping at {}", out.scanned);
+                warn!(
+                    "Codex rollout has too many malformed lines; stopping at {}",
+                    out.scanned
+                );
                 break;
             }
             continue;
@@ -279,9 +282,8 @@ pub fn parse_rollout_lines<'a>(
 
                 // Codex reports input and output; cached input is already part
                 // of the input count, so the billable total is input + output.
-                let total = int_field(usage, "total_tokens").unwrap_or_else(|| {
-                    input.unwrap_or(0) + output.unwrap_or(0)
-                });
+                let total = int_field(usage, "total_tokens")
+                    .unwrap_or_else(|| input.unwrap_or(0) + output.unwrap_or(0));
 
                 let model = out
                     .state
@@ -479,12 +481,8 @@ impl UsageProvider for CodexProvider {
                 last_ts_ms: cursor.last_timestamp_ms,
             };
 
-            let parsed = parse_rollout_lines(
-                chunk.lines(),
-                &initial,
-                request.since_ms,
-                request.registry,
-            );
+            let parsed =
+                parse_rollout_lines(chunk.lines(), &initial, request.since_ms, request.registry);
 
             scanned += parsed.scanned;
             skipped += parsed.skipped;
@@ -510,10 +508,13 @@ impl UsageProvider for CodexProvider {
                 records.push(record);
             }
 
+            // The offset advances only for a file that has been fully consumed,
+            // and the loop stops *between* files once the budget is spent. The
+            // previous `records.truncate(limit)` dropped the tail of a file whose
+            // offset had already moved past it, losing those events for good.
             next.offsets.insert(key, new_offset);
         }
 
-        records.truncate(request.limit);
         info!(
             "Codex: scanned {} line(s), imported {} record(s)",
             scanned,
@@ -546,12 +547,7 @@ mod tests {
 "#;
 
     fn parse(text: &str, since: Option<i64>) -> RolloutParse {
-        parse_rollout_lines(
-            text.lines(),
-            &RolloutState::default(),
-            since,
-            None,
-        )
+        parse_rollout_lines(text.lines(), &RolloutState::default(), since, None)
     }
 
     #[test]
@@ -600,7 +596,10 @@ mod tests {
         assert_eq!(parsed.records.len(), 1);
         let record = &parsed.records[0];
         assert_eq!(record.input_tokens, Some(100));
-        assert!(record.cached_tokens.is_none(), "absent cache data must not become 0");
+        assert!(
+            record.cached_tokens.is_none(),
+            "absent cache data must not become 0"
+        );
         assert!(record.cache_write_tokens.is_none());
         assert!(record.reasoning_tokens.is_none());
     }
@@ -643,13 +642,17 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "ftm-codex-inc-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            crate::test_support::unique_id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         let file = dir.join("rollout-1.jsonl");
 
         // First pass: only the first record exists.
-        let first_two: String = ROLLOUT.lines().take(4).map(|l| format!("{}\n", l)).collect();
+        let first_two: String = ROLLOUT
+            .lines()
+            .take(4)
+            .map(|l| format!("{}\n", l))
+            .collect();
         std::fs::write(&file, &first_two).unwrap();
 
         let provider = CodexProvider::with_sessions_dir(dir.clone());
@@ -667,13 +670,14 @@ mod tests {
         appended.push_str(&format!("{}\n", ROLLOUT.lines().nth(4).unwrap()));
         std::fs::write(&file, appended).unwrap();
 
-        let second = provider.fetch(&FetchRequest {
-            cursor: Some(&first.cursor),
-            since_ms: None,
-            registry: None,
-            limit: 1_000,
-        })
-        .unwrap();
+        let second = provider
+            .fetch(&FetchRequest {
+                cursor: Some(&first.cursor),
+                since_ms: None,
+                registry: None,
+                limit: 1_000,
+            })
+            .unwrap();
         assert_eq!(second.records.len(), 1);
         assert_eq!(second.records[0].event_id.as_deref(), Some("resp_2"));
         assert_eq!(second.scanned, 1, "only the appended line is re-read");
@@ -686,7 +690,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "ftm-codex-bad-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            crate::test_support::unique_id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
         std::fs::write(dir.join("a.jsonl"), "not json\n").unwrap();

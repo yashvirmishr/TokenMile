@@ -85,10 +85,16 @@ export function useDashboard() {
       setLastSync(event.payload);
       setSyncing(false);
       fetchDashboard();
-    }).then((fn) => {
-      if (active) unlisten = fn;
-      else fn();
-    });
+    })
+      .then((fn) => {
+        if (active) unlisten = fn;
+        else fn();
+      })
+      .catch((err) => {
+        // Without this the rejection is silent and the dashboard simply stops
+        // updating after the first load. Surface it instead.
+        setError(`Live updates unavailable: ${String(err)}`);
+      });
 
     return () => {
       active = false;

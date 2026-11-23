@@ -9,12 +9,16 @@ interface TimeRangeTabsProps {
 }
 
 const ranges: { key: TimeRange; label: string; keyHint: string }[] = [
-  { key: 'today', label: 'TODAY', keyHint: '1' },
-  { key: 'week', label: 'WEEK', keyHint: '2' },
-  { key: 'month', label: 'MONTH', keyHint: '3' },
-  { key: 'all', label: 'ALL TIME', keyHint: '4' },
+  { key: 'today', label: 'Today', keyHint: '1' },
+  { key: 'week', label: 'Week', keyHint: '2' },
+  { key: 'month', label: 'Month', keyHint: '3' },
+  { key: 'all', label: 'All', keyHint: '4' },
 ];
 
+/**
+ * Range selector. A single segmented rail rather than four loose buttons: the
+ * active range reads as the position of a switch, which is what it is.
+ */
 export function TimeRangeTabs({ active, onChange, disabled = false }: TimeRangeTabsProps) {
   useEffect(() => {
     if (disabled) return;
@@ -22,10 +26,18 @@ export function TimeRangeTabs({ active, onChange, disabled = false }: TimeRangeT
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
       if (e.metaKey || e.ctrlKey || e.altKey) return;
       switch (e.key) {
-        case '1': onChange('today'); break;
-        case '2': onChange('week'); break;
-        case '3': onChange('month'); break;
-        case '4': onChange('all'); break;
+        case '1':
+          onChange('today');
+          break;
+        case '2':
+          onChange('week');
+          break;
+        case '3':
+          onChange('month');
+          break;
+        case '4':
+          onChange('all');
+          break;
       }
     };
     window.addEventListener('keydown', handler);
@@ -33,14 +45,21 @@ export function TimeRangeTabs({ active, onChange, disabled = false }: TimeRangeT
   }, [onChange, disabled]);
 
   return (
-    <div className="flex gap-2 justify-center py-1">
+    <div
+      className="inline-flex items-center gap-0.5 rounded-[3px] border border-hair bg-shell p-0.5"
+      role="tablist"
+      aria-label="Time range"
+    >
       {ranges.map((r) => (
         <button
           key={r.key}
+          role="tab"
+          aria-selected={active === r.key}
           onClick={() => onChange(r.key)}
-          className={`tab ${active === r.key ? 'active' : ''}`}
+          className={`chip ${active === r.key ? 'chip-on' : ''}`}
+          title={`${r.label} [${r.keyHint}]`}
         >
-          [{r.keyHint}] {r.label}
+          {r.label}
         </button>
       ))}
     </div>

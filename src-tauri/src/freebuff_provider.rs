@@ -38,7 +38,7 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 
 use log::{error, info, warn};
-use rusqlite::Connection;
+use rusqlite::{Connection, OpenFlags};
 use serde::Deserialize;
 
 use crate::database::UsageRecord;
@@ -127,11 +127,27 @@ impl FreebuffProvider {
     }
 
     /// Read assistant messages newer than `since_ts` from one database.
-    fn read_database(&self, db_path: &Path, since_ts: i64) -> Result<Vec<FreebuffRawRecord>, String> {
-        let conn = Connection::open(db_path).map_err(|e| {
-            error!("Failed to open Freebuff database {}: {}", db_path.display(), e);
+    ///
+    /// Opened read-only: these files belong to Freebuff Desktop and a missing or
+    /// rotated database must never be recreated here.
+    fn read_database(
+        &self,
+        db_path: &Path,
+        since_ts: i64,
+    ) -> Result<Vec<FreebuffRawRecord>, String> {
+        let conn = Connection::open_with_flags(
+            db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )
+        .map_err(|e| {
+            error!(
+                "Failed to open Freebuff database {}: {}",
+                db_path.display(),
+                e
+            );
             format!("Failed to open database: {}", e)
         })?;
+        let _ = conn.busy_timeout(std::time::Duration::from_secs(5));
 
         let mut threads: HashMap<String, Option<String>> = HashMap::new();
         {
@@ -174,7 +190,10 @@ impl FreebuffProvider {
         let mut records = Vec::new();
         for row in rows {
             let Ok((seq, thread_id, metrics_json, ts)) = row else {
-                warn!("Skipping malformed Freebuff message row in {}", db_path.display());
+                warn!(
+                    "Skipping malformed Freebuff message row in {}",
+                    db_path.display()
+                );
                 continue;
             };
 
@@ -199,9 +218,9 @@ impl FreebuffProvider {
                 continue;
             }
 
-            let total = usage
-                .total_tokens
-                .unwrap_or_else(|| usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0));
+            let total = usage.total_tokens.unwrap_or_else(|| {
+                usage.input_tokens.unwrap_or(0) + usage.output_tokens.unwrap_or(0)
+            });
             if total == 0 {
                 continue;
             }
@@ -340,9 +359,9 @@ impl UsageProvider for FreebuffProvider {
             ProviderAvailability::NotInstalled => {
                 Some("Freebuff Desktop installation was not detected.".to_string())
             }
-            ProviderAvailability::UsageUnavailable => Some(
-                "Freebuff is installed but no project databases were found.".to_string(),
-            ),
+            ProviderAvailability::UsageUnavailable => {
+                Some("Freebuff is installed but no project databases were found.".to_string())
+            }
             other => Some(other.label().to_string()),
         }
     }
@@ -385,13 +404,16 @@ impl UsageProvider for FreebuffProvider {
                 next.last_event_id = record.event_id();
                 records.push(normalize_record(record, request.registry));
             }
+            // A database that has been started is always consumed completely and
+            // only then does its watermark advance. Truncating afterwards (the
+            // previous behaviour) dropped the tail of a database that had already
+            // been marked as imported, losing those messages permanently.
             next.extra.insert(key, newest.to_string());
             if newest > 0 {
                 next.last_timestamp_ms = Some(next.last_timestamp_ms.unwrap_or(0).max(newest));
             }
         }
 
-        records.truncate(request.limit);
         info!(
             "Freebuff: scanned {} message(s), imported {} record(s)",
             scanned,
@@ -476,7 +498,8 @@ mod tests {
 
     #[test]
     fn reports_not_installed_without_the_config_directory() {
-        let provider = FreebuffProvider::with_config_dir(PathBuf::from("/definitely/missing/freebuff"));
+        let provider =
+            FreebuffProvider::with_config_dir(PathBuf::from("/definitely/missing/freebuff"));
         assert_eq!(provider.availability(), ProviderAvailability::NotInstalled);
     }
 
@@ -485,12 +508,15 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "ftm-freebuff-empty-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            crate::test_support::unique_id()
         ));
         std::fs::create_dir_all(&dir).unwrap();
 
         let provider = FreebuffProvider::with_config_dir(dir.clone());
-        assert_eq!(provider.availability(), ProviderAvailability::UsageUnavailable);
+        assert_eq!(
+            provider.availability(),
+            ProviderAvailability::UsageUnavailable
+        );
 
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -530,7 +556,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "ftm-freebuff-inc-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            crate::test_support::unique_id()
         ));
         write_project(&dir, "Alpha", 1, 1_700_000_000_000);
         let provider = FreebuffProvider::with_config_dir(dir.clone());
@@ -577,7 +603,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "ftm-freebuff-isolation-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            crate::test_support::unique_id()
         ));
         write_project(&dir, "Healthy", 1, 1_700_000_000_000);
         std::fs::create_dir_all(dir.join("Broken")).unwrap();

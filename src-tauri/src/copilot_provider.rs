@@ -147,9 +147,13 @@ mod tests {
 
     #[test]
     fn missing_installation_is_reported_as_not_installed() {
-        let provider = GitHubCopilotProvider::with_config_dir(PathBuf::from("/definitely/missing/copilot"));
+        let provider =
+            GitHubCopilotProvider::with_config_dir(PathBuf::from("/definitely/missing/copilot"));
         assert_eq!(provider.availability(), ProviderAvailability::NotInstalled);
-        assert!(provider.detail().unwrap().contains("No GitHub Copilot CLI state"));
+        assert!(provider
+            .detail()
+            .unwrap()
+            .contains("No GitHub Copilot CLI state"));
     }
 
     #[test]
@@ -157,16 +161,25 @@ mod tests {
         let dir = std::env::temp_dir().join(format!(
             "ftm-copilot-{}-{}",
             std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap_or_default()
+            crate::test_support::unique_id()
         ));
         std::fs::create_dir_all(dir.join("logs")).unwrap();
-        std::fs::write(dir.join("config.json"), "{\"firstLaunchAt\":\"2026-08-13T07:20:10.121Z\"}")
-            .unwrap();
+        std::fs::write(
+            dir.join("config.json"),
+            "{\"firstLaunchAt\":\"2026-08-13T07:20:10.121Z\"}",
+        )
+        .unwrap();
         std::fs::write(dir.join("logs/process-1.log"), "started").unwrap();
 
         let provider = GitHubCopilotProvider::with_config_dir(dir.clone());
-        assert_eq!(provider.availability(), ProviderAvailability::UsageUnavailable);
-        assert!(provider.detail().unwrap().contains("no structured usage file"));
+        assert_eq!(
+            provider.availability(),
+            ProviderAvailability::UsageUnavailable
+        );
+        assert!(provider
+            .detail()
+            .unwrap()
+            .contains("no structured usage file"));
 
         let _ = std::fs::remove_dir_all(&dir);
     }

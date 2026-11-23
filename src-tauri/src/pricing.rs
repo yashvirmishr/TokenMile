@@ -472,6 +472,19 @@ fn resolve_override<'a>(
 // Resolved pricing profile (unified view)
 // ──────────────────────────────────────────────────────────────────────
 
+/// Whether an override's `actual` rates are a statement about *this* provider.
+///
+/// Rule 3 of [`resolve_override`] matches a model id across providers so a
+/// shared free model still gets its reference rates. That is not evidence that
+/// the model is free *here* — a paid API serving the same model id would be
+/// misreported as `$0.00` — so the actual-cost claim only applies when the entry
+/// names the provider, or is provider-agnostic by design (`api` / `any`).
+fn override_applies_to_provider(profile: &ModelPricingProfile, provider: &str) -> bool {
+    profile.provider.eq_ignore_ascii_case(provider)
+        || profile.provider == "api"
+        || profile.provider == "any"
+}
+
 /// A resolved pricing profile from any source.
 #[derive(Debug, Clone)]
 pub struct ResolvedProfile {
@@ -481,6 +494,9 @@ pub struct ResolvedProfile {
     pub reference_model: Option<String>,
     pub source: PricingSource,
     pub version: String,
+    /// `false` when the entry was matched only on the model id, so its `actual`
+    /// rates say nothing about what this provider charged.
+    pub actual_applies: bool,
 }
 
 // ──────────────────────────────────────────────────────────────────────
@@ -524,7 +540,11 @@ fn lookup_dynamic(registry: Option<&RegistryState>, model: &str) -> Option<Dynam
 ///    is known.
 /// 2. Dynamic LiteLLM registry (exact, prefix-stripped, then aliased model).
 /// 3. Unknown.
-fn resolve_pricing(provider: &str, model: &str, registry: Option<&RegistryState>) -> Option<ResolvedProfile> {
+fn resolve_pricing(
+    provider: &str,
+    model: &str,
+    registry: Option<&RegistryState>,
+) -> Option<ResolvedProfile> {
     // Layer 1: FTM overrides.
     if let Some(override_profile) = resolve_override(OVERRIDES, provider, model) {
         let mut reference = override_profile.reference.map(|r| PricingRates {
@@ -552,6 +572,7 @@ fn resolve_pricing(provider: &str, model: &str, registry: Option<&RegistryState>
             reference_model,
             source: PricingSource::FtmOverride,
             version: override_profile.version.to_string(),
+            actual_applies: override_applies_to_provider(override_profile, provider),
         });
     }
 
@@ -574,6 +595,7 @@ fn resolved_from_dynamic(entry: &DynamicPricingEntry, _from_alias: bool) -> Reso
         reference_model: Some(entry.model_id.clone()),
         source: PricingSource::LitellmRegistry,
         version: "litellm".to_string(),
+        actual_applies: true,
     }
 }
 
@@ -630,7 +652,7 @@ fn common_aliases(model: &str) -> Vec<String> {
 
 /// Return FTM override profiles for display in the pricing registry view.
 pub fn ftm_overrides() -> &'static [ModelPricingProfile] {
-    &OVERRIDES
+    OVERRIDES
 }
 
 /// Result of a pricing calculation for a usage record.
@@ -830,8 +852,11 @@ pub fn value_usage(input: &PricingInput<'_>, registry: Option<&RegistryState>) -
     };
 
     // Does this mapping explicitly state that the provider charges nothing?
-    let explicitly_free =
-        profile.source == PricingSource::FtmOverride && profile.actual.is_free();
+    // Only when the entry actually describes this provider — a model-id-only
+    // match (a free model on a different provider) says nothing about the bill.
+    let explicitly_free = profile.source == PricingSource::FtmOverride
+        && profile.actual_applies
+        && profile.actual.is_free();
 
     // A cache-write-only record has nothing a rate can be applied to, so its
     // reference value stays `None` instead of collapsing to `$0.00`.
@@ -839,7 +864,12 @@ pub fn value_usage(input: &PricingInput<'_>, registry: Option<&RegistryState>) -
         if cache_write_only {
             None
         } else {
-            Some(calculate_cost(rates, input_tokens, output_tokens, cached_tokens))
+            Some(calculate_cost(
+                rates,
+                input_tokens,
+                output_tokens,
+                cached_tokens,
+            ))
         }
     });
 
@@ -1015,9 +1045,17 @@ mod tests {
         for p in OVERRIDES {
             assert!(!p.provider.is_empty(), "{} has no provider", p.model_id);
             assert!(!p.model_id.is_empty(), "entry has no model id");
-            assert!(!p.display_name.is_empty(), "{} has no display name", p.model_id);
+            assert!(
+                !p.display_name.is_empty(),
+                "{} has no display name",
+                p.model_id
+            );
             assert!(!p.version.is_empty(), "{} has no version", p.model_id);
-            assert!(!p.verified_at.is_empty(), "{} has no verified date", p.model_id);
+            assert!(
+                !p.verified_at.is_empty(),
+                "{} has no verified date",
+                p.model_id
+            );
             if p.reference.is_some() {
                 assert!(
                     p.reference_model.is_some(),
@@ -1045,7 +1083,15 @@ mod tests {
 
     #[test]
     fn known_free_model_actual_cost_is_zero() {
-        let v = value(OC, "mimo-v2.5-free", None, PaymentMode::Promotional, Some(1_000_000), Some(500_000), Some(100_000));
+        let v = value(
+            OC,
+            "mimo-v2.5-free",
+            None,
+            PaymentMode::Promotional,
+            Some(1_000_000),
+            Some(500_000),
+            Some(100_000),
+        );
         // The provider confirms the model is free, so 0 is a price, not a guess.
         assert_eq!(v.actual_cost_usd, Some(0.0));
         assert_eq!(v.actual_cost, 0.0);
@@ -1054,15 +1100,36 @@ mod tests {
 
     #[test]
     fn known_free_model_reference_value_calculated() {
-        let v = value(OC, "mimo-v2.5-free", None, PaymentMode::Promotional, Some(1_000_000), Some(500_000), Some(100_000));
+        let v = value(
+            OC,
+            "mimo-v2.5-free",
+            None,
+            PaymentMode::Promotional,
+            Some(1_000_000),
+            Some(500_000),
+            Some(100_000),
+        );
         let ref_val = v.reference_value.unwrap();
         let expected = 0.14 + 0.14 + 0.00028;
-        assert!((ref_val - expected).abs() < 0.0001, "Expected ~{}, got {}", expected, ref_val);
+        assert!(
+            (ref_val - expected).abs() < 0.0001,
+            "Expected ~{}, got {}",
+            expected,
+            ref_val
+        );
     }
 
     #[test]
     fn known_free_model_free_value_equals_reference() {
-        let v = value(OC, "mimo-v2.5-free", None, PaymentMode::Promotional, Some(1_000_000), Some(500_000), Some(0));
+        let v = value(
+            OC,
+            "mimo-v2.5-free",
+            None,
+            PaymentMode::Promotional,
+            Some(1_000_000),
+            Some(500_000),
+            Some(0),
+        );
         let free_val = v.free_value.unwrap();
         let ref_val = v.reference_value.unwrap();
         assert!((free_val - ref_val).abs() < 0.0001);
@@ -1087,7 +1154,15 @@ mod tests {
 
     #[test]
     fn known_free_model_without_reference_is_not_unpriced() {
-        let v = value(OC, "nemotron-3-ultra-free", None, PaymentMode::Promotional, Some(1_000_000), Some(500_000), Some(0));
+        let v = value(
+            OC,
+            "nemotron-3-ultra-free",
+            None,
+            PaymentMode::Promotional,
+            Some(1_000_000),
+            Some(500_000),
+            Some(0),
+        );
         assert_eq!(v.actual_cost, 0.0);
         assert_eq!(v.reference_value, None);
         assert_eq!(v.free_value, None);
@@ -1097,8 +1172,20 @@ mod tests {
     #[test]
     fn missing_reference_pricing_never_fabricates_a_value() {
         for model in ["big-pickle", "fable/fable-5", "stealth/ox-alpha"] {
-            let v = value(FB, model, None, PaymentMode::Promotional, Some(1_000_000), Some(1_000_000), Some(0));
-            assert_eq!(v.reference_value, None, "{} fabricated a reference value", model);
+            let v = value(
+                FB,
+                model,
+                None,
+                PaymentMode::Promotional,
+                Some(1_000_000),
+                Some(1_000_000),
+                Some(0),
+            );
+            assert_eq!(
+                v.reference_value, None,
+                "{} fabricated a reference value",
+                model
+            );
             assert_eq!(v.free_value, None, "{} fabricated a free value", model);
         }
     }
@@ -1109,7 +1196,15 @@ mod tests {
 
     #[test]
     fn unknown_model_is_reported_as_unknown_not_free() {
-        let v = value(OC, "new-model-x", None, PaymentMode::Unknown, Some(1_000_000), Some(1_000_000), Some(0));
+        let v = value(
+            OC,
+            "new-model-x",
+            None,
+            PaymentMode::Unknown,
+            Some(1_000_000),
+            Some(1_000_000),
+            Some(0),
+        );
         assert_eq!(v.actual_cost, 0.0);
         assert_eq!(v.reference_value, None);
         assert_eq!(v.pricing_status, PricingStatus::Unknown);
@@ -1118,7 +1213,15 @@ mod tests {
 
     #[test]
     fn unknown_model_with_provider_cost_keeps_actual_cost() {
-        let v = value(OC, "new-model-x", Some(5.0), PaymentMode::Unknown, Some(1_000_000), Some(1_000_000), Some(0));
+        let v = value(
+            OC,
+            "new-model-x",
+            Some(5.0),
+            PaymentMode::Unknown,
+            Some(1_000_000),
+            Some(1_000_000),
+            Some(0),
+        );
         // The persisted field, not only its numeric mirror.
         assert_eq!(v.actual_cost_usd, Some(5.0));
         assert_eq!(v.actual_cost, 5.0);
@@ -1200,21 +1303,48 @@ mod tests {
 
     #[test]
     fn zero_tokens_returns_no_tokens() {
-        let v = value("api", "gpt-4o", None, PaymentMode::Unknown, None, None, None);
+        let v = value(
+            "api",
+            "gpt-4o",
+            None,
+            PaymentMode::Unknown,
+            None,
+            None,
+            None,
+        );
         assert_eq!(v.pricing_status, PricingStatus::NoTokens);
         assert_eq!(v.actual_cost, 0.0);
         // A source that *reports* zero tokens still produced a record, so only
         // "no metric reported at all" is NoTokens (unknown != zero).
-        let reported_zero =
-            value("api", "gpt-4o", None, PaymentMode::Unknown, Some(0), Some(0), Some(0));
+        let reported_zero = value(
+            "api",
+            "gpt-4o",
+            None,
+            PaymentMode::Unknown,
+            Some(0),
+            Some(0),
+            Some(0),
+        );
         assert_ne!(reported_zero.pricing_status, PricingStatus::NoTokens);
     }
 
     #[test]
     fn cached_tokens_use_separate_rate() {
-        let v = value(OC, "mimo-v2.5-free", None, PaymentMode::Promotional, Some(0), Some(0), Some(1_000_000));
+        let v = value(
+            OC,
+            "mimo-v2.5-free",
+            None,
+            PaymentMode::Promotional,
+            Some(0),
+            Some(0),
+            Some(1_000_000),
+        );
         let ref_val = v.reference_value.unwrap();
-        assert!((ref_val - 0.0028).abs() < 0.0001, "Expected ~0.0028, got {}", ref_val);
+        assert!(
+            (ref_val - 0.0028).abs() < 0.0001,
+            "Expected ~0.0028, got {}",
+            ref_val
+        );
     }
 
     // ──────────────────────────────────────────────────────────────────
@@ -1223,13 +1353,60 @@ mod tests {
 
     #[test]
     fn pricing_version_is_set() {
-        let v = value("api", "gpt-4o", Some(1.0), PaymentMode::Unknown, Some(100), Some(100), Some(0));
+        let v = value(
+            "api",
+            "gpt-4o",
+            Some(1.0),
+            PaymentMode::Unknown,
+            Some(100),
+            Some(100),
+            Some(0),
+        );
         assert!(!v.pricing_version.is_empty());
     }
 
     #[test]
     fn historical_records_keep_the_version_they_were_priced_with() {
         assert_ne!(PricingStatus::from_str("unknown"), PricingStatus::NoTokens);
+    }
+
+    #[test]
+    fn a_free_override_does_not_make_another_providers_model_free() {
+        // Freebuff serves `mimo/mimo-v2.5` for free. A paid API serving the same
+        // model id must not inherit that claim: its reference rates are useful,
+        // but `$0.00` would be a fabricated bill.
+        let v = value(
+            "some-paid-api",
+            "mimo/mimo-v2.5",
+            None,
+            PaymentMode::Api,
+            Some(1_000_000),
+            Some(500_000),
+            Some(0),
+        );
+
+        assert_eq!(v.actual_cost_usd, None, "no actual cost is known");
+        assert_eq!(v.free_value, None, "a saving cannot be computed");
+        assert!(
+            v.reference_value.is_some(),
+            "the reference rates still apply"
+        );
+        assert_eq!(v.pricing_status, PricingStatus::ReferenceApplied);
+    }
+
+    #[test]
+    fn a_provider_specific_free_override_still_reports_a_known_zero() {
+        let v = value(
+            FB,
+            "mimo/mimo-v2.5",
+            None,
+            PaymentMode::Promotional,
+            Some(1_000_000),
+            Some(0),
+            Some(0),
+        );
+        assert_eq!(v.actual_cost_usd, Some(0.0));
+        assert_eq!(v.free_value, Some(v.reference_value.unwrap()));
     }
 
     #[test]
@@ -1245,7 +1422,15 @@ mod tests {
 
     #[test]
     fn ftm_override_source_is_tracked() {
-        let v = value(OC, "mimo-v2.5-free", None, PaymentMode::Promotional, Some(1_000_000), Some(500_000), Some(0));
+        let v = value(
+            OC,
+            "mimo-v2.5-free",
+            None,
+            PaymentMode::Promotional,
+            Some(1_000_000),
+            Some(500_000),
+            Some(0),
+        );
         assert_eq!(v.pricing_source, PricingSource::FtmOverride);
         // The profile version travels with the value, for historical repro.
         assert_eq!(v.pricing_version, "2025-07.1");
@@ -1253,7 +1438,15 @@ mod tests {
 
     #[test]
     fn unknown_model_source_is_unknown() {
-        let v = value(OC, "nonexistent", None, PaymentMode::Unknown, Some(1_000_000), Some(500_000), Some(0));
+        let v = value(
+            OC,
+            "nonexistent",
+            None,
+            PaymentMode::Unknown,
+            Some(1_000_000),
+            Some(500_000),
+            Some(0),
+        );
         assert_eq!(v.pricing_source, PricingSource::Unknown);
     }
 
@@ -1265,18 +1458,37 @@ mod tests {
     fn subscription_usage_has_no_per_token_actual_cost() {
         // The reference value is known, but a flat fee buys no per-token spend,
         // so there is nothing to compare against and no knowable saving.
-        let v = value(OC, "mimo-v2.5-free", None, PaymentMode::Subscription, Some(1_000_000), Some(500_000), Some(0));
+        let v = value(
+            OC,
+            "mimo-v2.5-free",
+            None,
+            PaymentMode::Subscription,
+            Some(1_000_000),
+            Some(500_000),
+            Some(0),
+        );
         assert_eq!(v.payment_mode, PaymentMode::Subscription);
         assert_eq!(v.actual_cost_usd, None);
         assert_eq!(v.actual_cost, 0.0);
         assert!(v.reference_value.is_some());
-        assert_eq!(v.free_value, None, "free_value needs a known actual cost too");
+        assert_eq!(
+            v.free_value, None,
+            "free_value needs a known actual cost too"
+        );
         assert_eq!(v.pricing_status, PricingStatus::ReferenceApplied);
     }
 
     #[test]
     fn promotional_usage_is_a_known_zero_and_keeps_its_reference_value() {
-        let v = value(OC, "mimo-v2.5-free", None, PaymentMode::Promotional, Some(1_000_000), Some(500_000), Some(0));
+        let v = value(
+            OC,
+            "mimo-v2.5-free",
+            None,
+            PaymentMode::Promotional,
+            Some(1_000_000),
+            Some(500_000),
+            Some(0),
+        );
         assert_eq!(v.payment_mode, PaymentMode::Promotional);
         assert_eq!(v.actual_cost_usd, Some(0.0));
         // Known values, not two `None`s that happen to compare equal.
@@ -1434,8 +1646,15 @@ mod tests {
         let v = value_usage(&e, Some(&reg));
 
         assert_eq!(v.pricing_source, PricingSource::FtmOverride);
-        assert_eq!(v.actual_cost_usd, Some(0.0), "still free through the provider");
-        assert_eq!(v.reference_model.as_deref(), Some("deepseek/deepseek-v4-flash"));
+        assert_eq!(
+            v.actual_cost_usd,
+            Some(0.0),
+            "still free through the provider"
+        );
+        assert_eq!(
+            v.reference_model.as_deref(),
+            Some("deepseek/deepseek-v4-flash")
+        );
         assert_eq!(v.pricing_status, PricingStatus::ReferenceApplied);
         // 1M input @0.2 + 0.5M output @0.8
         assert!((v.reference_value.unwrap() - 0.6).abs() < 1e-9);

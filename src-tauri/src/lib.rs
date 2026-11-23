@@ -37,8 +37,28 @@ mod copilot_provider;
 mod database;
 mod freebuff_provider;
 mod gemini_cli_provider;
+mod logging;
 mod model_normalization;
 mod opencode_provider;
+mod providers;
+
+/// Helpers shared by the test suite.
+#[cfg(test)]
+pub(crate) mod test_support {
+    use std::sync::atomic::{AtomicU64, Ordering};
+
+    static NEXT_ID: AtomicU64 = AtomicU64::new(0);
+
+    /// A process-unique id for scratch file and directory names.
+    ///
+    /// Deliberately a counter rather than a timestamp. Two threads can read the
+    /// same `Utc::now()` tick on Windows (100 ns clock granularity), which let two
+    /// parallel tests build the same temp path and read each other's fixtures —
+    /// a failure that looked like a provider bug and appeared only sometimes.
+    pub fn unique_id() -> u64 {
+        NEXT_ID.fetch_add(1, Ordering::Relaxed)
+    }
+}
 mod preferences;
 mod pricing;
 mod provider;
@@ -58,7 +78,7 @@ use log::{info, warn};
 use serde::Serialize;
 use tauri::{Manager, State};
 
-use database::{DashboardData, Database, ProviderStat, ProviderStatus};
+use database::{DashboardData, Database, ProviderStat, ProviderStatus, UsageSeries};
 use preferences::{AppPreferences, PreferencesStore};
 use pricing::PricingRates;
 use provider::{ProviderDescriptor, ProviderRegistry};
@@ -195,11 +215,19 @@ fn build_provider_status(state: &AppState) -> Vec<ProviderStatus> {
 // ──────────────────────────────────────────────────────────────────────
 
 /// Sync every enabled provider. Never fails: per-provider errors are in the report.
+///
+/// Runs on a blocking thread: a first backfill parses provider files and writes
+/// up to [`sync::SYNC_RECORD_LIMIT`] rows, which must not occupy the IPC thread.
 #[tauri::command]
-fn sync_all(app: tauri::AppHandle, state: State<'_, AppState>) -> SyncReport {
-    let report = sync::sync_all(&state);
-    sync::publish(&app, &report);
-    report
+async fn sync_all(app: tauri::AppHandle) -> SyncReport {
+    let handle = app.clone();
+    match tauri::async_runtime::spawn_blocking(move || sync::sync_once_guarded(&handle)).await {
+        Ok(report) => report,
+        Err(e) => {
+            warn!("Sync task failed to run: {}", e);
+            SyncReport::default()
+        }
+    }
 }
 
 #[tauri::command]
@@ -211,13 +239,13 @@ fn get_last_sync_report(state: State<'_, AppState>) -> Option<SyncReport> {
 // Dashboard
 // ──────────────────────────────────────────────────────────────────────
 
-#[tauri::command]
+#[tauri::command(async)]
 fn get_dashboard(
     state: State<'_, AppState>,
     days: Option<i64>,
     provider: Option<String>,
 ) -> Result<DashboardData, String> {
-    let (summary, provider_usage, model_usage, activity) = {
+    let (summary, provider_usage, model_usage, activity, series) = {
         let db = state.db.lock().map_err(|e| e.to_string())?;
         let summary = db
             .get_usage_summary(days, provider.as_deref())
@@ -229,9 +257,12 @@ fn get_dashboard(
             .get_model_usage(days, provider.as_deref())
             .map_err(|e| e.to_string())?;
         let activity = db
-            .get_activity(20, provider.as_deref())
+            .get_activity(days, 20, provider.as_deref())
             .map_err(|e| e.to_string())?;
-        (summary, provider_usage, model_usage, activity)
+        let series = db
+            .get_series(days, provider.as_deref())
+            .map_err(|e| e.to_string())?;
+        (summary, provider_usage, model_usage, activity, series)
     };
 
     let providers = build_provider_status(&state);
@@ -241,12 +272,30 @@ fn get_dashboard(
         provider_usage,
         model_usage,
         activity,
+        series,
         providers,
     })
 }
 
+/// Daily token totals for the calendar view.
+///
+/// Separate from `get_dashboard` on purpose: the calendar always spans the last
+/// year at day resolution, while the dashboard series follows the selected
+/// range. Bundling it into the dashboard would make every range switch refetch a
+/// year of daily buckets it cannot use.
+#[tauri::command(async)]
+fn get_calendar(
+    state: State<'_, AppState>,
+    days: Option<i64>,
+    provider: Option<String>,
+) -> Result<UsageSeries, String> {
+    let db = state.db.lock().map_err(|e| e.to_string())?;
+    db.get_calendar(days, provider.as_deref())
+        .map_err(|e| e.to_string())
+}
+
 /// Provider health: detection state, last sync, stored records and tokens.
-#[tauri::command]
+#[tauri::command(async)]
 fn get_providers(state: State<'_, AppState>) -> Vec<ProviderStatus> {
     build_provider_status(&state)
 }
@@ -333,7 +382,7 @@ pub struct PricingRegistryView {
 
 /// The pricing maintenance view: every configured model plus any model seen in
 /// the local history that has no pricing entry.
-#[tauri::command]
+#[tauri::command(async)]
 fn get_pricing_registry(state: State<'_, AppState>) -> Result<PricingRegistryView, String> {
     // Collect the set of (provider, model) pairs the user has actually used.
     let used_keys: std::collections::HashSet<(String, String)> = {
@@ -437,9 +486,17 @@ fn get_registry_status(state: State<'_, AppState>) -> RegistryStatusView {
     }
 }
 
+/// Re-download the pricing registry.
+///
+/// The HTTP call (up to 30 s) runs on a blocking thread, so a slow network cannot
+/// stall the UI or the rest of the IPC surface.
 #[tauri::command]
-fn refresh_pricing(state: State<'_, AppState>) -> Result<RegistryStatusView, String> {
-    state.pricing_registry.refresh().map_err(|e| e.to_string())?;
+async fn refresh_pricing(state: State<'_, AppState>) -> Result<RegistryStatusView, String> {
+    let registry = state.pricing_registry.clone();
+    tauri::async_runtime::spawn_blocking(move || registry.refresh())
+        .await
+        .map_err(|e| format!("Pricing refresh task failed: {}", e))??;
+
     let status = state.pricing_registry.status();
     Ok(RegistryStatusView {
         model_count: status.model_count,
@@ -449,11 +506,8 @@ fn refresh_pricing(state: State<'_, AppState>) -> Result<RegistryStatusView, Str
     })
 }
 
-#[tauri::command]
-fn search_pricing_registry(
-    state: State<'_, AppState>,
-    query: String,
-) -> Vec<PricingProfileView> {
+#[tauri::command(async)]
+fn search_pricing_registry(state: State<'_, AppState>, query: String) -> Vec<PricingProfileView> {
     let lower = query.to_lowercase();
     let mut results: Vec<PricingProfileView> = pricing::ftm_overrides()
         .iter()
@@ -552,8 +606,6 @@ fn quit_app(app: tauri::AppHandle) {
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    env_logger::init();
-
     let data_dir = get_data_dir();
     if let Err(e) = std::fs::create_dir_all(&data_dir) {
         eprintln!(
@@ -563,14 +615,27 @@ pub fn run() {
         );
     }
 
-    // 1. Usage history. A broken database must not stop the desktop shell from
-    //    starting: the window, tray and preferences still work.
+    // Logging and crash capture come before anything that can fail, so a startup
+    // failure is diagnosable instead of silent (a Windows release build has no
+    // console to print to).
+    logging::init(&data_dir);
+    logging::install_panic_hook(&data_dir);
+
+    // 1. Usage history. A broken database must not leave the user with a window
+    //    that silently does nothing: log the reason and exit with a non-zero
+    //    code, pointing at the file that holds the detail.
     let db_path: PathBuf = data_dir.join("freetokenmeter.db");
     let db = match Database::new(&db_path) {
         Ok(db) => db,
         Err(e) => {
-            eprintln!("Failed to initialize database {}: {}", db_path.display(), e);
-            return;
+            log::error!("Failed to initialize database {}: {}", db_path.display(), e);
+            eprintln!(
+                "FreeTokenMeter could not open its history database:\n  {}\n  {}\nSee {} for details.",
+                db_path.display(),
+                e,
+                logging::log_path(&data_dir).display()
+            );
+            std::process::exit(1);
         }
     };
 
@@ -597,6 +662,16 @@ pub fn run() {
     let provider_count = state.providers.len();
 
     tauri::Builder::default()
+        // Two meters writing to one SQLite file would race on the same cursors.
+        // A second launch surfaces the window that is already running instead.
+        .plugin(tauri_plugin_single_instance::init(|app, _argv, _cwd| {
+            info!("Another instance tried to start; focusing the running window");
+            if let Some(window) = app.get_webview_window("main") {
+                let _ = window.show();
+                let _ = window.unminimize();
+                let _ = window.set_focus();
+            }
+        }))
         .manage(state)
         .setup(move |app| {
             let handle = app.handle().clone();
@@ -633,9 +708,10 @@ pub fn run() {
             window::show_main_window(&handle);
 
             info!(
-                "FreeTokenMeter ready ({} providers, pricing {})",
+                "FreeTokenMeter ready ({} providers, pricing {}, log {})",
                 provider_count,
-                pricing::PRICING_VERSION
+                pricing::PRICING_VERSION,
+                logging::log_path(&data_dir).display()
             );
             Ok(())
         })
@@ -661,6 +737,7 @@ pub fn run() {
             sync_all,
             get_last_sync_report,
             get_dashboard,
+            get_calendar,
             get_providers,
             get_provider_descriptors,
             get_future_providers,

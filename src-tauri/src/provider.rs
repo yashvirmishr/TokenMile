@@ -225,7 +225,10 @@ impl ProviderRegistry {
     /// assert that a registry contains exactly what it should.
     #[cfg(test)]
     pub fn get(&self, id: &str) -> Option<&dyn UsageProvider> {
-        self.providers.iter().find(|p| p.id() == id).map(|p| p.as_ref())
+        self.providers
+            .iter()
+            .find(|p| p.id() == id)
+            .map(|p| p.as_ref())
     }
 
     pub fn len(&self) -> usize {
@@ -257,15 +260,13 @@ impl ProviderRegistry {
 
 /// The shipped provider set.
 ///
-/// Order matters only for presentation: the UI lists providers in this order.
+/// The list itself lives in [`crate::providers::catalogue`], which is the one
+/// place to edit when adding a provider. Order is presentation order.
 pub fn default_registry() -> ProviderRegistry {
     let mut registry = ProviderRegistry::new();
-    registry.register(Box::new(crate::opencode_provider::OpenCodeProvider::new()));
-    registry.register(Box::new(crate::freebuff_provider::FreebuffProvider::new()));
-    registry.register(Box::new(crate::claude_code_provider::ClaudeCodeProvider::new()));
-    registry.register(Box::new(crate::codex_provider::CodexProvider::new()));
-    registry.register(Box::new(crate::gemini_cli_provider::GeminiCliProvider::new()));
-    registry.register(Box::new(crate::copilot_provider::GitHubCopilotProvider::new()));
+    for provider in crate::providers::catalogue() {
+        registry.register(provider);
+    }
     registry
 }
 
@@ -354,7 +355,10 @@ mod tests {
         assert_eq!(registry.len(), 2);
         assert!(registry.get("alpha").is_some());
         assert!(registry.get("gamma").is_none());
-        assert_eq!(registry.get("beta").unwrap().availability(), ProviderAvailability::NotInstalled);
+        assert_eq!(
+            registry.get("beta").unwrap().availability(),
+            ProviderAvailability::NotInstalled
+        );
     }
 
     #[test]
@@ -376,18 +380,17 @@ mod tests {
     }
 
     #[test]
-    fn default_registry_has_six_primary_providers() {
+    fn the_default_registry_exposes_every_catalogued_provider() {
         let registry = default_registry();
-        assert_eq!(registry.len(), 6);
-        for id in [
-            "opencode",
-            "freebuff",
-            "claude-code",
-            "codex",
-            "gemini-cli",
-            "github-copilot",
-        ] {
-            assert!(registry.get(id).is_some(), "missing provider {}", id);
+        let catalogue = crate::providers::catalogue();
+        assert_eq!(registry.len(), catalogue.len());
+
+        for provider in catalogue {
+            assert!(
+                registry.get(provider.id()).is_some(),
+                "{} is in the catalogue but not the registry",
+                provider.id()
+            );
         }
     }
 
@@ -417,5 +420,4 @@ mod tests {
             );
         }
     }
-
 }

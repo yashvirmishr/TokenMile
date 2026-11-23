@@ -1,74 +1,113 @@
 import type { ProviderStatus, ProviderUsage as ProviderUsageType } from '../types';
-import { formatBilling, formatCurrency, formatTokens } from '../types';
+import { formatBilling, formatCurrency, formatTokens, seriesColor } from '../types';
 
 interface ProviderTableProps {
   providers: ProviderUsageType[];
   status: ProviderStatus[];
+  /** Shown when the selected range has no rows at all. */
+  rangeLabel: string;
 }
 
 /**
- * Per-provider totals.
+ * Where the tokens went, as a ranked list with a proportional measure per row.
  *
- * ACTUAL shows the money the user is actually billed. `N/A` is not the same as
- * `$0.00`: it means no per-token spend exists (subscription usage). Providers
- * metered in AI credits show their units instead of a dollar figure.
+ * The measure is the point: percentages in a table are hard to compare, a shared
+ * bar is not. ACTUAL stays `N/A` for plan usage, and a credit-metered provider
+ * shows its units instead of a dollar figure — those are different claims.
  */
-export function ProviderTable({ providers, status }: ProviderTableProps) {
+export function ProviderTable({ providers, status, rangeLabel }: ProviderTableProps) {
   const label = (id: string) => status.find((s) => s.id === id)?.short_label ?? id.toUpperCase();
+  const colour = (id: string) => {
+    const index = status.findIndex((s) => s.id === id);
+    return seriesColor(index >= 0 ? index : 0);
+  };
 
-  if (providers.length === 0) {
-    return (
-      <div className="terminal-box">
-        <div className="terminal-header">PROVIDERS</div>
-        <div className="mt-2 text-muted text-sm">No usage data yet</div>
-      </div>
-    );
-  }
+  const max = Math.max(1, ...providers.map((p) => p.tokens));
 
   return (
-    <div className="terminal-box">
-      <div className="terminal-header flex justify-between">
-        <span>PROVIDER</span>
-        <span className="flex gap-4 sm:gap-6">
-          <span>TOKENS</span>
-          <span className="hidden sm:inline">%</span>
-          <span>ACTUAL</span>
-          <span className="hidden sm:inline">REFERENCE</span>
-        </span>
+    <section className="panel">
+      <div className="panel-head">
+        <span className="label">Providers</span>
+        <span className="label">{rangeLabel}</span>
       </div>
-      <div className="mt-2 overflow-x-auto">
-        {providers.map((p) => {
-          const billing = formatBilling(p.billing_units, p.billing_unit);
-          return (
-            <div key={p.provider} className="provider-row min-w-[300px]">
-              <span className="text-text font-medium text-sm truncate" title={p.provider}>
-                {label(p.provider)}
-              </span>
-              <span className="flex gap-4 sm:gap-6 items-center">
-                <span className="text-green w-20 text-right">{formatTokens(p.tokens)}</span>
-                <span className="text-muted w-12 text-right hidden sm:inline">
-                  {p.percentage.toFixed(1)}%
+
+      {providers.length === 0 ? (
+        <div className="px-4 py-8 text-center">
+          <p className="caption">No provider recorded usage in this range.</p>
+        </div>
+      ) : (
+        <>
+          <div className="grid grid-cols-[minmax(78px,1fr)_auto_minmax(44px,1.6fr)_auto] items-center gap-3 border-b border-hair px-4 py-1.5 sm:grid-cols-[minmax(90px,1fr)_auto_minmax(44px,1.8fr)_auto_auto]">
+            <span className="label">Provider</span>
+            <span className="label text-right">Tokens</span>
+            <span className="label">Share</span>
+            <span className="label text-right">Actual</span>
+            <span className="label hidden text-right sm:block">Reference</span>
+          </div>
+
+          {providers.map((p) => {
+            const billing = formatBilling(p.billing_units, p.billing_unit);
+            const meta = status.find((s) => s.id === p.provider);
+            return (
+              <div
+                key={p.provider}
+                className="row grid-cols-[minmax(78px,1fr)_auto_minmax(44px,1.6fr)_auto] sm:grid-cols-[minmax(90px,1fr)_auto_minmax(44px,1.8fr)_auto_auto]"
+              >
+                <span className="flex min-w-0 items-center gap-2">
+                  <span
+                    className="status-dot"
+                    style={{ background: colour(p.provider) }}
+                    aria-hidden
+                  />
+                  <span className="flex min-w-0 flex-col">
+                    <span className="label label-bright truncate">{label(p.provider)}</span>
+                    <span className="mono text-[9.5px] text-bone-3">
+                      {p.records.toLocaleString('en-US')} req
+                      {meta && !meta.connected ? ' · offline' : ''}
+                    </span>
+                  </span>
                 </span>
+
+                <span className="mono text-right text-[12px] text-bone">
+                  {formatTokens(p.tokens)}
+                </span>
+
+                <span className="flex items-center gap-2">
+                  <span className="measure w-full">
+                    <span
+                      className="measure-fill"
+                      style={{
+                        width: `${(p.tokens / max) * 100}%`,
+                        background: colour(p.provider),
+                      }}
+                    />
+                  </span>
+                  <span className="mono w-9 text-right text-[9.5px] text-bone-3">
+                    {p.percentage.toFixed(0)}%
+                  </span>
+                </span>
+
                 <span
-                  className={`w-16 text-right ${
-                    p.actual_cost == null && billing === '—' ? 'text-muted' : 'text-green'
+                  className={`mono text-right text-[12px] ${
+                    p.actual_cost == null && billing === '—' ? 'text-bone-3' : 'text-needle'
                   }`}
-                  title={p.billing_metric_name ?? undefined}
+                  title={p.billing_metric_name ?? 'Actual cost'}
                 >
-                  {p.actual_cost == null ? billing : formatCurrency(p.actual_cost)}
+                  {p.actual_cost != null
+                    ? formatCurrency(p.actual_cost)
+                    : billing !== '—'
+                      ? billing
+                      : 'N/A'}
                 </span>
-                <span className="text-warning w-16 text-right hidden sm:inline">
+
+                <span className="mono hidden text-right text-[12px] text-bone-3 sm:block">
                   {formatCurrency(p.reference_value)}
                 </span>
-              </span>
-            </div>
-          );
-        })}
-      </div>
-      <div className="mt-2 pt-2 border-t border-border text-xs text-muted">
-        ACTUAL N/A = no per-token spend (subscription/entitlement usage). Credits are
-        billed units, not dollars.
-      </div>
-    </div>
+              </div>
+            );
+          })}
+        </>
+      )}
+    </section>
   );
 }

@@ -1,20 +1,57 @@
 @import "tailwindcss";
 
-@theme {
-  --color-bg: #0B0F0D;
-  --color-bg-light: #121A15;
-  --color-bg-lighter: #1A2420;
-  --color-text: #D7FFD9;
-  --color-green: #39FF88;
-  --color-green-dim: #2A7A5A;
-  --color-muted: #617568;
-  --color-warning: #FFD166;
-  --color-error: #FF5C5C;
-  --color-border: #1E2E24;
-  --color-border-light: #2A3D32;
-  --color-cyan: #00E5FF;
+/*
+  ────────────────────────────────────────────────────────────────────────────
+  FreeTokenMeter — "bench instrument"
+  ────────────────────────────────────────────────────────────────────────────
 
-  --font-mono: 'JetBrains Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+  The meter is a precision instrument you leave running on a desk: anodised
+  charcoal case, engraved micro-labels, bone-white figures, and a single
+  vermilion needle that marks what matters. Warm neutrals instead of pure black
+  so it sits next to an editor without glare; hairlines instead of boxes so it
+  reads as one machined surface rather than a pile of cards.
+
+  Three type roles, no overlap:
+    display  a book serif, only for the wordmark and quiet sentences
+    label    Bahnschrift (DIN), for structure, titles and the big numerals
+    data     a monospace, for every aligned figure
+
+  Everything is local: no webfont is fetched, so `font-src 'self'` holds.
+*/
+
+@theme {
+  /* Surfaces — warm, not black. */
+  --color-ink: #14120d;
+  --color-shell: #1a1813;
+  --color-raise: #23201a;
+  --color-hair: #2e2a21;
+  --color-hair-hi: #453d30;
+
+  /* Ink */
+  --color-bone: #efe7d8;
+  --color-bone-2: #bcb2a0;
+  --color-bone-3: #8a8071;
+
+  /* Signal */
+  --color-needle: #e9613a;
+  --color-verd: #56a295;
+  --color-brass: #c9a227;
+  --color-slate: #6e8ca8;
+  --color-alert: #d95a4a;
+
+  /* Series palette for provider bars and chart stacks. */
+  --color-series-1: #e9613a;
+  --color-series-2: #56a295;
+  --color-series-3: #c9a227;
+  --color-series-4: #6e8ca8;
+  --color-series-5: #a8743f;
+  --color-series-6: #7d8c4a;
+
+  --font-display: 'Iowan Old Style', 'Palatino Linotype', Palatino, Constantia, Georgia,
+    serif;
+  --font-label: Bahnschrift, 'DIN Alternate', 'Segoe UI Variable Display', 'Segoe UI',
+    system-ui, sans-serif;
+  --font-data: 'Cascadia Mono', Consolas, 'SF Mono', ui-monospace, monospace;
 }
 
 @layer base {
@@ -24,170 +61,474 @@
     box-sizing: border-box;
   }
 
-  body {
-    font-family: var(--font-mono);
-    background-color: var(--color-bg);
-    color: var(--color-text);
-    -webkit-font-smoothing: antialiased;
-    -moz-osx-font-smoothing: grayscale;
+  html,
+  body,
+  #root {
+    width: 100%;
+    height: 100%;
     overflow: hidden;
   }
 
-  #root {
-    width: 100vw;
-    height: 100vh;
-    overflow: hidden;
+  body {
+    background-color: var(--color-ink);
+    color: var(--color-bone);
+    font-family: var(--font-label);
+    font-size: 13px;
+    font-weight: 350;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    /* A warm bloom from the top so the window has depth rather than flat fill. */
+    background-image:
+      radial-gradient(
+        120% 90% at 12% -20%,
+        color-mix(in srgb, var(--color-needle) 9%, transparent) 0%,
+        transparent 55%
+      ),
+      radial-gradient(
+        100% 80% at 100% 0%,
+        color-mix(in srgb, var(--color-verd) 6%, transparent) 0%,
+        transparent 60%
+      );
+  }
+
+  /* The graticule: an engraved dot grid, just visible under raking light. */
+  #root::before {
+    content: '';
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    background-image: radial-gradient(
+      circle at 1px 1px,
+      color-mix(in srgb, var(--color-bone) 5%, transparent) 1px,
+      transparent 0
+    );
+    background-size: 24px 24px;
+    mask-image: radial-gradient(100% 70% at 50% 0%, #000 0%, transparent 85%);
+  }
+
+  ::selection {
+    background: color-mix(in srgb, var(--color-needle) 30%, transparent);
+    color: var(--color-bone);
   }
 
   ::-webkit-scrollbar {
-    width: 6px;
+    width: 8px;
+    height: 8px;
   }
-
   ::-webkit-scrollbar-track {
-    background: var(--color-bg);
+    background: transparent;
   }
-
   ::-webkit-scrollbar-thumb {
-    background: var(--color-border-light);
-    border-radius: 3px;
+    background: var(--color-hair);
+    border-radius: 99px;
+    border: 2px solid var(--color-ink);
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--color-hair-hi);
   }
 
-  ::-webkit-scrollbar-thumb:hover {
-    background: var(--color-muted);
+  button {
+    font-family: inherit;
+    color: inherit;
+    background: none;
+    border: none;
+    cursor: pointer;
+  }
+
+  :focus-visible {
+    outline: 1px solid var(--color-needle);
+    outline-offset: 2px;
   }
 }
 
 @layer components {
-  .terminal-box {
-    border: 1px solid var(--color-border);
-    background-color: var(--color-bg-light);
-    padding: 0.75rem 1rem;
+  /* ── Structure ─────────────────────────────────────────────────────────── */
+
+  .panel {
+    position: relative;
+    background: var(--color-shell);
+    border: 1px solid var(--color-hair);
   }
 
-  .terminal-header {
-    border-bottom: 1px solid var(--color-border);
-    padding: 0.5rem 1rem;
-    font-size: 0.75rem;
-    color: var(--color-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
+  /* An engraved top edge: brighter hairline, one pixel. */
+  .panel::after {
+    content: '';
+    position: absolute;
+    inset: 0 0 auto 0;
+    height: 1px;
+    background: linear-gradient(
+      90deg,
+      transparent,
+      color-mix(in srgb, var(--color-bone) 10%, transparent) 20%,
+      color-mix(in srgb, var(--color-bone) 10%, transparent) 80%,
+      transparent
+    );
   }
 
-  .stat-value {
-    font-size: 1.5rem;
-    font-weight: 700;
-    color: var(--color-green);
-    font-variant-numeric: tabular-nums;
+  .panel-open {
+    background: var(--color-shell);
+    border: 1px solid var(--color-hair-hi);
+    box-shadow: 0 24px 60px -24px rgba(0, 0, 0, 0.8);
   }
 
-  .stat-label {
-    font-size: 0.65rem;
-    color: var(--color-muted);
-    text-transform: uppercase;
-    letter-spacing: 0.1em;
-  }
-
-  .divider {
-    border-top: 1px solid var(--color-border);
-    margin: 0.5rem 0;
-  }
-
-  .provider-row {
+  .panel-head {
     display: flex;
+    align-items: baseline;
     justify-content: space-between;
-    align-items: center;
-    padding: 0.375rem 0;
-    font-size: 0.8125rem;
+    gap: 12px;
+    padding: 10px 14px 9px;
+    border-bottom: 1px solid var(--color-hair);
   }
 
-  .activity-row {
-    display: flex;
-    gap: 0.75rem;
-    padding: 0.25rem 0;
-    font-size: 0.75rem;
-    color: var(--color-muted);
+  .rule {
+    height: 1px;
+    background: var(--color-hair);
   }
 
-  .activity-row .time {
-    color: var(--color-green-dim);
-    min-width: 6ch;
-  }
+  /* ── Type ──────────────────────────────────────────────────────────────── */
 
-  .activity-row .provider {
-    color: var(--color-text);
-    min-width: 8ch;
-  }
-
-  .activity-row .model {
-    color: var(--color-muted);
-    flex: 1;
-    overflow: hidden;
-    text-overflow: ellipsis;
+  .label {
+    font-family: var(--font-label);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.17em;
+    text-transform: uppercase;
+    color: var(--color-bone-3);
     white-space: nowrap;
   }
 
-  .activity-row .tokens {
-    color: var(--color-green);
-    text-align: right;
+  .label-bright {
+    color: var(--color-bone-2);
   }
 
-  .pulse {
-    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  /* The instrument readout: DIN condensed, light weight, tight. */
+  .figure {
+    font-family: var(--font-label);
+    font-variant-numeric: tabular-nums;
+    font-weight: 300;
+    letter-spacing: -0.015em;
+    line-height: 0.92;
+    color: var(--color-bone);
   }
 
-  @keyframes pulse {
-    0%, 100% { opacity: 1; }
-    50% { opacity: 0.5; }
+  .figure-unit {
+    font-family: var(--font-label);
+    font-size: 0.42em;
+    font-weight: 500;
+    letter-spacing: 0.08em;
+    color: var(--color-bone-3);
+    margin-left: 0.12em;
   }
 
-  .fade-in {
-    animation: fadeIn 0.3s ease-in;
+  .mono {
+    font-family: var(--font-data);
+    font-variant-numeric: tabular-nums;
+    font-feature-settings: 'zero' 1;
   }
 
-  @keyframes fadeIn {
-    from { opacity: 0; transform: translateY(-4px); }
-    to { opacity: 1; transform: translateY(0); }
+  .serif {
+    font-family: var(--font-display);
   }
 
-  .text-cyan {
-    color: var(--color-cyan);
+  .wordmark {
+    font-family: var(--font-display);
+    font-size: 15px;
+    font-style: italic;
+    letter-spacing: 0.005em;
+    color: var(--color-bone);
   }
 
-  .pricing-section {
-    font-size: 0.7rem;
-    color: var(--color-muted);
+  .caption {
+    font-family: var(--font-display);
+    font-size: 12px;
+    font-style: italic;
+    color: var(--color-bone-3);
+    line-height: 1.45;
+  }
+
+  /* ── Controls ──────────────────────────────────────────────────────────── */
+
+  .chip {
+    font-family: var(--font-label);
+    font-size: 9.5px;
+    font-weight: 500;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
-  }
-
-  .pricing-rule {
-    border-top: 1px solid var(--color-border-light);
-    margin: 0.15rem 0 0.35rem 0;
-  }
-
-  .card {
-    border: 1px solid var(--color-border);
-    background-color: var(--color-bg-light);
-  }
-
-  .tab {
-    padding: 0.25rem 0.75rem;
-    font-size: 0.75rem;
-    font-family: var(--font-mono);
-    background: transparent;
+    color: var(--color-bone-3);
+    padding: 5px 9px;
     border: 1px solid transparent;
-    color: var(--color-muted);
-    cursor: pointer;
-    transition: all 0.15s ease;
+    border-radius: 2px;
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease,
+      border-color 0.15s ease;
   }
 
-  .tab:hover {
-    color: var(--color-text);
-    border-color: var(--color-border);
+  .chip:hover {
+    color: var(--color-bone);
+    background: var(--color-raise);
   }
 
-  .tab.active {
-    color: var(--color-green);
-    border-color: var(--color-green);
+  .chip-on {
+    color: var(--color-ink);
+    background: var(--color-bone);
+    border-color: var(--color-bone);
+  }
+
+  .chip-on:hover {
+    color: var(--color-ink);
+    background: var(--color-bone);
+  }
+
+  /* A chip variant for filters: selected reads as an engraved outline, not a
+     filled block, so the data stays the brightest thing on screen. */
+  .chip-filter-on {
+    color: var(--color-bone);
+    border-color: var(--color-hair-hi);
+    background: var(--color-raise);
+  }
+
+  .icon-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 26px;
+    height: 26px;
+    border-radius: 3px;
+    color: var(--color-bone-3);
+    transition:
+      color 0.15s ease,
+      background-color 0.15s ease;
+  }
+
+  .icon-btn:hover {
+    color: var(--color-bone);
+    background: var(--color-raise);
+  }
+
+  .icon-btn-on {
+    color: var(--color-needle);
+    background: color-mix(in srgb, var(--color-needle) 12%, transparent);
+  }
+
+  .ghost-btn {
+    font-family: var(--font-label);
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    text-transform: uppercase;
+    color: var(--color-bone-3);
+    padding: 4px 6px;
+    border-radius: 2px;
+    transition: color 0.15s ease;
+  }
+
+  .ghost-btn:hover {
+    color: var(--color-bone);
+  }
+
+  /* ── Data ──────────────────────────────────────────────────────────────── */
+
+  .row {
+    display: grid;
+    align-items: center;
+    gap: 12px;
+    padding: 9px 14px;
+    transition: background-color 0.12s ease;
+  }
+
+  .row + .row {
+    border-top: 1px solid color-mix(in srgb, var(--color-hair) 70%, transparent);
+  }
+
+  .row:hover {
+    background: color-mix(in srgb, var(--color-raise) 60%, transparent);
+  }
+
+  /* A proportional fill: the magnitude you can actually see. */
+  .measure {
+    position: relative;
+    height: 3px;
+    background: color-mix(in srgb, var(--color-bone) 7%, transparent);
+    overflow: hidden;
+    border-radius: 99px;
+  }
+
+  .measure-fill {
+    position: absolute;
+    inset: 0 auto 0 0;
+    border-radius: 99px;
+    transform-origin: left center;
+    animation: measure-in 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  /* Token-mix segments: in flow, so each segment keeps its own width. */
+  .mix {
+    display: flex;
+    gap: 2px;
+    height: 6px;
+    width: 100%;
+  }
+
+  .mix-seg {
+    height: 100%;
+    border-radius: 99px;
+    transform-origin: left center;
+    animation: measure-in 0.55s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .status-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 99px;
+    flex: none;
+  }
+
+  .live-dot {
+    width: 5px;
+    height: 5px;
+    border-radius: 99px;
+    background: var(--color-verd);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-verd) 50%, transparent);
+    animation: breathe 2.6s ease-in-out infinite;
+  }
+
+  .live-dot-busy {
+    background: var(--color-needle);
+    box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-needle) 50%, transparent);
+  }
+
+  /* ── Chart ─────────────────────────────────────────────────────────────── */
+
+  .bar {
+    transform-box: fill-box;
+    transform-origin: bottom;
+    animation: bar-in 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  }
+
+  .chart-grid {
+    stroke: color-mix(in srgb, var(--color-bone) 7%, transparent);
+    stroke-width: 1;
+  }
+
+  .chart-baseline {
+    stroke: var(--color-hair-hi);
+    stroke-width: 1;
+  }
+
+  .chart-mean {
+    stroke: color-mix(in srgb, var(--color-bone) 28%, transparent);
+    stroke-width: 1;
+    stroke-dasharray: 2 4;
+  }
+
+  .chart-tick {
+    font-family: var(--font-data);
+    font-size: 8.5px;
+    fill: var(--color-bone-3);
+    letter-spacing: 0.04em;
+  }
+
+  .chart-hover-band {
+    fill: color-mix(in srgb, var(--color-bone) 4.5%, transparent);
+  }
+
+  /* ── Motion ────────────────────────────────────────────────────────────── */
+
+  .reveal {
+    animation: reveal 0.5s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+    animation-delay: var(--reveal-delay, 0ms);
+  }
+
+  @keyframes reveal {
+    from {
+      opacity: 0;
+      transform: translateY(6px);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  @keyframes bar-in {
+    from {
+      transform: scaleY(0);
+      opacity: 0.4;
+    }
+    to {
+      transform: scaleY(1);
+      opacity: 1;
+    }
+  }
+
+  @keyframes measure-in {
+    from {
+      transform: scaleX(0);
+    }
+    to {
+      transform: scaleX(1);
+    }
+  }
+
+  @keyframes breathe {
+    0%,
+    100% {
+      box-shadow: 0 0 0 0 color-mix(in srgb, var(--color-verd) 45%, transparent);
+    }
+    50% {
+      box-shadow: 0 0 0 4px transparent;
+    }
+  }
+
+  @keyframes spin {
+    to {
+      transform: rotate(360deg);
+    }
+  }
+
+  .spin {
+    animation: spin 0.9s linear infinite;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .reveal,
+    .bar,
+    .measure-fill,
+    .live-dot,
+    .spin {
+      animation: none !important;
+    }
+  }
+
+  /* ── Panels (settings / pricing) ───────────────────────────────────────── */
+
+  .field {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    width: 100%;
+    padding: 7px 2px;
+    border-bottom: 1px solid color-mix(in srgb, var(--color-hair) 60%, transparent);
+    text-align: left;
+  }
+
+  .field:last-child {
+    border-bottom: none;
+  }
+
+  .field:hover {
+    background: color-mix(in srgb, var(--color-raise) 50%, transparent);
+  }
+
+  .key {
+    font-family: var(--font-data);
+    font-size: 9px;
+    color: var(--color-bone-3);
+    border: 1px solid var(--color-hair);
+    border-radius: 2px;
+    padding: 1px 4px;
+    min-width: 15px;
+    text-align: center;
   }
 }

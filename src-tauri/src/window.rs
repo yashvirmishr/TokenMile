@@ -11,9 +11,7 @@ use std::time::Duration;
 
 use log::{info, warn};
 use serde::Serialize;
-use tauri::{
-    AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow,
-};
+use tauri::{AppHandle, Emitter, Manager, PhysicalPosition, PhysicalSize, WebviewWindow};
 
 use crate::preferences::{resolve_geometry, MonitorRect};
 use crate::AppState;
@@ -208,7 +206,10 @@ pub fn persist_geometry(app: &AppHandle) {
         return;
     };
     match prefs.set_geometry(width, height, x, y) {
-        Ok(true) => info!("Persisted window geometry {}x{} at ({:?}, {:?})", width, height, x, y),
+        Ok(true) => info!(
+            "Persisted window geometry {}x{} at ({:?}, {:?})",
+            width, height, x, y
+        ),
         Ok(false) => {}
         Err(e) => warn!("Failed to persist window geometry: {}", e),
     }
@@ -240,7 +241,12 @@ pub fn spawn_geometry_persister(app: AppHandle) {
             // Wait out the debounce window; if the window moves again we simply
             // loop around and wait again.
             std::thread::sleep(GEOMETRY_DEBOUNCE);
-            if app.state::<AppState>().geometry_events.load(Ordering::SeqCst) != generation {
+            if app
+                .state::<AppState>()
+                .geometry_events
+                .load(Ordering::SeqCst)
+                != generation
+            {
                 continue;
             }
 

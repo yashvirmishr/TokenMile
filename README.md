@@ -28,6 +28,7 @@ provider source
 | OpenCode | ✓ | ✓ | Supported — verified end to end on this machine |
 | Freebuff | ✓ | ✓ | Supported — verified end to end on this machine |
 | Codex | ✓ | ✓ (reference) | Supported — verified end to end on this machine |
+| DeepAI Code | ✓ | ✓ (reference) | Supported — verified end to end on this machine (recipe-based) |
 | Claude Code | ✓ | ✓ (reference) | Implemented — **not verified**: no local transcripts on this machine |
 | Gemini CLI | ✓ | ✓ (reference) | Implemented — **not verified**: no local session files on this machine |
 | GitHub Copilot | — | — | **Unsupported**: no structured local usage source in the installed version |
@@ -55,10 +56,14 @@ never shown as `0 tokens`.
 
 ### OpenCode — supported
 
-- **Source:** `~/.local/share/opencode/opencode.db`, the `session` table
-  (`tokens_input`, `tokens_output`, `tokens_reasoning`, `tokens_cache_read`,
-  `tokens_cache_write`, `cost`, `time_updated`). `model` is JSON:
+- **Source:** `~/.local/share/opencode/opencode.db` (or `$XDG_DATA_HOME/opencode`),
+  the `session_v2` table, falling back to the legacy `session` table when the current
+  schema is absent. Both carry `tokens_input`, `tokens_output`, `tokens_reasoning`,
+  `tokens_cache_read`, `tokens_cache_write`, `cost`, `time_updated`. `model` is JSON:
   `{"id":"mimo-v2.5-free","providerID":"opencode"}`.
+  Reading only `session` silently dropped everything OpenCode wrote after its
+  `session_v2` migration — on the machine this was verified on, that was 74 of 257
+  sessions. The table is chosen per pass, so a downgrade still works.
 - **Collected:** model, per-session token classes, provider-reported cost, timestamp.
 - **Cost semantics:** a positive `cost` is a real API-style charge
   (`PAYMENT MODE: API`). A zero cost means a promotional model, reported as a known
@@ -69,7 +74,28 @@ never shown as `0 tokens`.
 - **Dedup key:** session id (`oc_<session-id>`).
 - **Limitations:** OpenCode's own total counts every token class it tracks, which is
   what is reported here; it is not comparable token-for-token with Codex totals.
-- **Authentication:** none required — FreeTokenMeter only reads the local database.
+- **Authentication:** none required — FreeTokenMeter opens the database read-only
+  (plus a 5 s `busy_timeout`), so it can never create, lock or modify OpenCode's state.
+
+### DeepAI Code — supported (defined as a recipe)
+
+- **Source:** `~/.deepai-code/userdata/statev2.sqlite`,
+  `orchestration_v2_projection_provider_turns`. One row per provider turn, joined to
+  `orchestration_v2_projection_provider_sessions` for the model.
+- **Collected:** model, `turnTokenUsage` (`inputTokens`, `outputTokens`,
+  `cachedInputTokens`, `cacheCreationTokens`), turn start/completion time, thread id.
+- **Not collected:** `tokenUsage` in the same payload is a *context-window snapshot*
+  (`usedTokens`/`maxTokens`) that repeats and resets; summing it would be
+  meaningless, so it is ignored deliberately.
+- **Cost semantics:** the harness reports no per-turn dollar amount, so the payment
+  mode is `SUBSCRIPTION`, actual cost is `N/A`, and the reference value comes from the
+  pricing registry.
+- **Incremental:** the watermark is `COALESCE(completed_at, started_at)`, so a turn
+  that was still running when first read is re-read once it finishes. The record id is
+  the provider turn id, so the re-read replaces the row instead of adding one.
+- **Implementation:** this provider is not a bespoke integration. It is a
+  [`SqliteRecipe`](src-tauri/src/providers/recipe.rs) — one `SELECT` and eight facts —
+  driven by the shared engine. See [Adding a new provider](#adding-a-new-provider).
 
 ### Freebuff — supported
 
@@ -362,8 +388,13 @@ registered providers
   offset per append-only file, or a per-database timestamp). History is not
   re-imported on every cycle.
 - **Backfill:** the first sync of a provider uses the configured window (default
-  30 days) so a large history cannot stall the dashboard. A pass is capped at 20,000
-  records, and the watermark is only advanced when nothing was truncated.
+  30 days) so a large history cannot stall the dashboard.
+- **Bounded passes are lossless:** a pass stops *between* sources at the 20,000-record
+  cap. A source that has been started (a rollout file, a transcript, a project
+  database, the OpenCode table) is always consumed to its end before its own offset or
+  watermark advances, so the cap costs a later pass rather than the tail of the data.
+  OpenCode, which has a single watermark instead of per-file offsets, advances to the
+  newest `time_updated` it actually took, so a truncated pass still makes progress.
 - **Dedup:** one record per provider-native event id, with `INSERT OR REPLACE` as the
   database-level uniqueness rule.
 
@@ -425,7 +456,7 @@ FreeTokenMeter/
 └── public/
 ```
 
-### Database schema (v5)
+### Database schema (v6)
 
 One normalized table, no provider-specific tables. Provider detail lives in
 normalized columns so adding a provider never forks the schema.
@@ -460,8 +491,11 @@ CREATE TABLE usage_records (
     event_id TEXT,                   -- provider-native event identity
     source_type TEXT NOT NULL DEFAULT 'unknown',
     source_id TEXT,
-    time_created INTEGER NOT NULL
+    time_created INTEGER NOT NULL,   -- when FTM ingested the row (never updated)
+    event_time_ms INTEGER NOT NULL DEFAULT 0  -- when the usage actually happened
 );
+
+CREATE INDEX idx_usage_event_time ON usage_records(event_time_ms);
 
 CREATE TABLE sync_state (
     provider TEXT PRIMARY KEY,
@@ -473,10 +507,18 @@ CREATE TABLE sync_state (
 );
 ```
 
-Existing databases are migrated in place to v5; the previous schema's `NOT NULL
+Existing databases are migrated in place; the previous schema's `NOT NULL
 DEFAULT 0` token columns are rebuilt so unknown metrics can be stored as `NULL`.
 A migration test asserts that existing history survives with its reference values and
 known-zero costs intact.
+
+`event_time_ms` exists because `time_created` is an *ingestion* timestamp. Filtering
+ranges on ingestion time made a 90-day backfill report all of its history as `TODAY`.
+Every range query and the activity feed now use `event_time_ms` (indexed), which is
+derived from the provider's own timestamp at write time. Rows written before v6 are
+backfilled once from `timestamp`, falling back to `time_created` when the timestamp is
+unparseable; `time_created` itself is preserved on re-sync so a record's ingest time
+never moves.
 
 ## Privacy
 
@@ -487,6 +529,18 @@ FreeTokenMeter is local-first.
   to the frontend. FreeTokenMeter only reads local files the providers already write.
 - No API keys are requested: every provider that is supported authenticates through
   its own tool.
+- The webview loads nothing from the network: the Google Fonts stylesheet was removed
+  and the window runs under a restrictive CSP (`default-src 'self'`, no remote
+  origins in `connect-src`). Only the pricing-registry download in the Rust backend
+  touches the network, and only list prices are exchanged.
+
+### Logs
+
+`%APPDATA%/freetokenmeter/logs/freetokenmeter.log` (Windows;
+`~/.local/share/freetokenmeter/logs/` elsewhere) records startup, each sync pass, and
+per-provider failures, and panics are appended there too. The level defaults to
+`info` and can be raised with `FTM_LOG=debug`. The log holds counts, provider names
+and error messages — never message content, prompts or credentials.
 
 ## Tech stack
 
@@ -512,6 +566,15 @@ Production build:
 npm run tauri build
 ```
 
+On Windows this writes an NSIS installer to
+`src-tauri/target/release/bundle/nsis/FreeTokenMeter_<version>_x64-setup.exe`
+(current-user install, no admin prompt). The bundle configuration lives under
+`bundle` in `src-tauri/tauri.conf.json`.
+
+A second launch focuses the window that is already running instead of starting a
+second meter that would sync against the same database
+(`tauri-plugin-single-instance`).
+
 ## Keyboard shortcuts
 
 | Key | Action |
@@ -532,6 +595,69 @@ The provider filter tabs are clickable and are generated from the providers the
 backend reports, so adding a provider needs no frontend change.
 
 ## Adding a new provider
+
+Every provider is registered in exactly one place —
+`src-tauri/src/providers/mod.rs::catalogue()` — and nothing else in the application
+knows the list. Sync, storage, pricing, aggregation, commands and the UI all iterate
+the registry built from it, so a new provider needs no edits there.
+
+### Path A — a SQLite recipe (the common case, ~20 lines)
+
+If the tool keeps usage in a local SQLite database, do not write a provider. Add a
+recipe:
+
+```rust
+// src-tauri/src/providers/my_tool.rs
+use crate::providers::recipe::{ColumnCheck, SqliteRecipe};
+use crate::usage::{BillingUnit, PaymentMode};
+use std::path::PathBuf;
+
+fn databases() -> Vec<PathBuf> {
+    dirs::home_dir()
+        .map(|home| vec![home.join(".my-tool/usage.db")])
+        .unwrap_or_default()
+}
+
+pub static RECIPE: SqliteRecipe = SqliteRecipe {
+    id: "my-tool",                 // canonical id, lowercase, a database key
+    name: "My Tool",
+    short_label: "MYTOOL",         // ≤ 8 chars, fits the provider column
+    source_type: "my_tool_database",
+    payment_mode: PaymentMode::Subscription,
+    billing_unit: BillingUnit::Usd,
+    backfill_days: 30,
+    cached_is_subset_of_input: false, // true when `input` already counts cache reads
+    databases,
+    requires: &[ColumnCheck::new("turns", "created_at")],
+    rows_sql: "
+        SELECT id, model, created_at, input_tokens, output_tokens, cached_tokens,
+               NULL, NULL, NULL
+        FROM turns
+        WHERE created_at > ?1
+        ORDER BY created_at ASC
+        LIMIT ?2",
+    watermark_sql: "SELECT MAX(created_at) FROM turns",
+};
+```
+
+Then register it with one line:
+
+```rust
+// providers/mod.rs
+recipe::provider(&my_tool::RECIPE),
+```
+
+The shared engine handles read-only access, the schema probe, the sync window, the
+watermark, truncation and the pricing hand-off. `src-tauri/src/providers/recipe.rs`
+documents the row contract (nine columns, one optional tenth), the two bound
+parameters (`?1` = ISO-8601 window floor, `?2` = row limit), and the two cache
+semantics. JSON payloads need no Rust: extract them in SQL with `json_extract`, as the
+DeepAI Code recipe does.
+
+### Path B — a bespoke reader
+
+For append-only JSONL logs, rewritten session documents, several project databases, or
+a schema that has changed between releases, implement `UsageProvider`:
 
 1. Create `src-tauri/src/my_provider.rs` and implement `UsageProvider`:
 
@@ -570,15 +696,16 @@ let value = pricing::value_usage(&PricingInput {
 }, request.registry);
 ```
 
-3. Register it in one place — `provider::default_registry()`:
+3. Register it in `providers::catalogue()`:
 
 ```rust
-registry.register(Box::new(crate::my_provider::MyProvider::new()));
+Box::new(crate::my_provider::MyProvider::new()),
 ```
 
 That is the whole integration. Synchronization, deduplication, the database,
 pricing, aggregation, the UI, provider health and provider toggles all iterate the
-registry, so none of them change.
+registry, so none of them change. `providers::mod` has a test that fails if an id is a
+placeholder, a label is too wide, or a provider reports a state without a reason.
 
 **Provider rules**
 
@@ -636,4 +763,8 @@ and the second pass adds nothing (deduplication).
 - Claude Code and Gemini CLI integrations are written, tested with fixtures and
   awaiting a machine that actually has their local session data
 - GitHub Copilot, Cline, Kiro, Cursor and Windsurf await a supported structured
-  source; the UI lists them as `UNSUPPORTED` with the reason
+  source; the UI lists them as `UNSUPPORTED` with the reason. A Copilot `data.db`
+  exists on some installations and is the most promising next source.
+- No code signing, no auto-updater and no licence file yet, so the installer is
+  unsigned (SmartScreen warns on first run). Signing needs a certificate and the
+  updater needs a key pair, both of which are deployment decisions.
